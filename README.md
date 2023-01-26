@@ -49,7 +49,7 @@ provided in this repository.
 
 options(stringsAsFactors=FALSE)
 
-################# SCRIPT CONFIGURATION AND SETUP ####################################
+############ PREPARATION OF IN-MEMORY VARIABLES (optional) ##########################
 rootdir="./"  				# Contains inputs and outputs
 setwd(rootdir)
 
@@ -69,7 +69,7 @@ numericMeta<-numericMetaALS   #sample traits/metadata
 
 
 #################### CONFIGURATION PARAMETERS FULL LIST #############################
-##             WITH SAMPLE VALUES GIVEN FO SAMPLE DATA PROVIDED                    ##
+##             WITH SAMPLE VALUES GIVEN FOR SAMPLE DATA PROVIDED                   ##
 
 heatmapScale="minusLogFDR"                        					# Accepted options are "p.unadj" or "minusLogFDR"
 heatmapTitle="My Network Module Overlaps with 5 Brain Cell Type Marker Reference Lists"	# What are your categories (or WGCNA) list of lists based on?  And What gene lists are your reference lists?
