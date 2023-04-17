@@ -72,7 +72,10 @@ numericMeta<-numericMetaALS   #sample traits/metadata
 ##             WITH SAMPLE VALUES GIVEN FOR SAMPLE DATA PROVIDED                   ##
 
 heatmapScale="minusLogFDR"                        					# Accepted options are "p.unadj" or "minusLogFDR"
-heatmapTitle="My Network Module Overlaps with 5 Brain Cell Type Marker Reference Lists"	# What are your categories (or WGCNA) list of lists based on?  And What gene lists are your reference lists?
+heatmapTitle="My Network Module Overlaps with 5 Brain Cell Type Marker Reference Lists"	# What are your categories (or WGCNA) list of lists based on?
+                                                                                        # And What gene lists are your reference lists?
+paletteColors="YlGnBu"                                          # See valid palettes using RColorBrewer::display.brewer.all()
+                                                                # Can be a vector if there are more than 1 refDataFiles (heatmaps to generate)
 
 FileBaseName="MyNetworkModules_FET_to_5brainCellTypeMarkerLists"
 refDataDescription="5brainCellTypes"				# One Description of reference Data list(s) specified in PDF file name below
