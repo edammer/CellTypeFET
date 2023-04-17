@@ -7,13 +7,16 @@
 # +8/11/20 fixed calculations to match divya's (swapped moduleList and categories vars, and removed unique() for totProteomeLength
 # +5/08/21 added barOption - Divya style barplots
 # +1/26/23 Converted to geneListFET function for Levi Wood ALS/FTD network collaboration
+# +4/17/23 Added RColorBrewer palette specification to parameter/variable paletteColors (vector of length=# of marker list file inputs),
+#          vector character strings must be one of the sequential (first group) or qualitative (third group) palettes shown by:
+#          RColorBrewer::display.brewer.all()
 #-------------------------------------------------------------------------#
 # revisited to define fly cell types in Seurat 87 lists 2/10/2019
 # Analysis for Laura Volpicelli, mouse a-Syn Bilaterally Injected Brain Regions 2/15/2019
 # LFQ-MEGA Cell Type analysis performed with this code, with grey proteins added back in to totProteome, allGenes  4/5/2019 #***## (2 lines)
 #=========================================================================#
 geneListFET <- function(modulesInMemory=TRUE,categoriesFile=NA,categorySpeciesCode=NA,resortListsDecreasingSize=FALSE,barOption=FALSE,adjustFETforLookupEfficiency=FALSE,allowDuplicates=TRUE,
-                        refDataFiles=NA,speciesCode=NA,refDataDescription="RefList(s)_not_described",FileBaseName="geneListFET_to_RefList(s)",
+                        refDataFiles=NA,speciesCode=NA,refDataDescription="RefList(s)_not_described",FileBaseName="geneListFET_to_RefList(s)",paletteColors="YlGnBu",
                         heatmapTitle="Heatmap Title (not specified)", heatmapScale="minusLogFDR", verticalCompression=3, rootdir="./", reproduceHistoricCalc=FALSE, env=.GlobalEnv) {
 
 require(WGCNA,quietly=TRUE)
@@ -425,7 +428,34 @@ for (refDataFile in refDataFiles) {
 		par(mfrow=c(verticalCompression,1))
 		par( mar = c(9.5, 10, 4.5, 2) ) #bottom, left, top, right #text lines
 		
-		colvec<- rev(brewer.pal(11,"Spectral")[1:6])   #c("#FFFFFF", rev(brewer.pal(11,"Spectral")[1:6])) #wr(500)
+		if(exists("colvec")) suppressWarnings(rm(colvec))
+		
+		#RColorBrewer::display.brewer.all()
+		if(iter>length(paletteColors)) {
+		   cat(paste0("  - paletteColors specified being recycled for additional heatmaps for inputs after #",length(paletteColors),"\n"))
+		   paletteColors<-c(paletteColors,rep(paletteColors,ceiling(length(refDataFiles)/length(paletteColors))))
+		}
+		if(!paletteColors[iter] %in% c("YlOrRd","YlOrBr","YlGnBu","YlGn","Reds","RdPu","Purples","PuRd","PuBuGn","PuBu","OrRd","Oranges","Greys","Greens","GnBu","BuPu","BnGn","Blues",
+		                           "Spectral","RdYlGn","RdYlBu","RdGy","RdBu","PuOr","PRGn","PiYG","BrBG")) {
+		   cat(paste0("  - paletteColors specified as '",paletteColors[iter],"' is not in RColorBrewer::display.brewer.all() groups 1 or 3.\n    Using palette 'YlGnBu' (yellow, green, blue)...\n"))
+		   paletteColors[iter]="YlGnBu"
+		}
+		if(paletteColors[iter] %in% c("YlOrRd","YlOrBr","YlGnBu","YlGn","Reds","RdPu","Purples","PuRd","PuBuGn","PuBu","OrRd","Oranges","Greys","Greens","GnBu","BuPu","BnGn","Blues")) {
+		   paletteLength=9
+		   outOfParkColor=brewer.pal(paletteLength,paletteColors[iter])[paletteLength]
+		   colvec<- brewer.pal(paletteLength,paletteColors[iter])[1:6]
+		} else {
+		   paletteLength=11
+		   # pure purple for outOfPark maximum scale color, deprecated.
+		   # if(paletteColors[iter] %in% c("Spectral","RdYlGn","RdYlBu","RdGy","RdBu","PuOr","BrBG")) { outOfParkColor="#A020F0" } else { outOfParkColor="darkviolet" }
+		   outOfParkColor=brewer.pal(paletteLength,paletteColors[iter])[paletteLength]
+#		   if(as.boolean(revPalette[iter])) {
+		      colvec<- rev(brewer.pal(paletteLength,paletteColors[iter])[1:6])  #rev so we take the left side of the palette color swatches
+#		   } else {
+#		      colvec<- brewer.pal(paletteLength,paletteColors[iter])[6:11]  #no rev if we want to take the right half of the palette color swatches
+#		   }
+		}
+		   
 		colvecRamped1<- vector()
 		for (k in 1:(length(colvec)-1)) {
 		   gradations <- if (k<4) { 6 } else { 25 }
@@ -433,10 +463,10 @@ for (refDataFile in refDataFiles) {
 		   colvecRamped1<-c(colvecRamped1, temp(gradations))
 		}
 		
-		temp2<-colorRampPalette(c(colvecRamped1[length(colvecRamped1)], "#A020F0"))  #grade to purple at top of scale
+		temp2<-colorRampPalette(c(colvecRamped1[length(colvecRamped1)], outOfParkColor)) ## grade to outOfParkColor at top of scale
 		colvecRamped1<-c(colvecRamped1, temp2(gradations))
 		
-		colvecRamped1<-c("#FFFFFF",colvecRamped1)
+		colvecRamped1<-c("#FFFFFF",colvecRamped1)  ## grade to white at bottom of scale
 		
 		
 		if (modulesInMemory) { categoryColorSymbols=paste0("ME",names(moduleList)) } else { if(!length(na.omit(match(orderedLabelsByRelatedness[,2],rownames(NegLogUncorr))))==nrow(orderedLabelsByRelatedness)) { categoryColorSymbols=dummyColors } else { categoryColorSymbols=names(moduleList) } }
