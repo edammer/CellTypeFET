@@ -33,7 +33,7 @@ if(!modulesInMemory) {  # Read in Categories as list
   #  for(eachList in unique(enumeratedListsDF[,"ClusterID"])) { enumeratedLists[[as.character(eachList)]] <- enumeratedListsDF[which(enumeratedListsDF$ClusterID==eachList),"GeneSymbol"] }
 
   # new format: multicolumn .csv with Symbols or UniqueIDs and each cluster's symbols in a separate column with clusterID as column name (in row 1)
-	enumeratedLists <- as.list(read.csv(paste(refDataDir,categoriesFile, sep=""),sep=",", stringsAsFactors = FALSE,header=T,check.names=FALSE)) 
+	enumeratedLists <- as.list(read.csv(paste0(refDataDir,categoriesFile), stringsAsFactors=FALSE,header=T,check.names=FALSE)) 
 	names(enumeratedLists)
 		
 	#number of entries with no blanks
@@ -93,7 +93,7 @@ for (refDataFile in refDataFiles) {
 	this.heatmapScale<-heatmapScale
 	
 	
-	refData <- as.list(read.csv(paste(refDataDir,refDataFile, sep=""),sep=",", stringsAsFactors = FALSE,header=T)) 
+	refData <- as.list(read.csv(paste0(refDataDir,refDataFile), stringsAsFactors = FALSE,header=T,check.names=FALSE)) 
 	names(refData)
 	
 	
