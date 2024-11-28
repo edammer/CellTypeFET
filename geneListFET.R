@@ -393,6 +393,12 @@ for (refDataFile in refDataFiles) {
 	write.csv(outputData,file = paste0(outputtabs,"/",FileBaseName,".Overlap.in.",refDataFile,"-",duplicateHandling,"-hitListStats.csv"))
 
 	#auto-check if all FET (BH) calculations = 1, then switch to p value visualization
+		if(length(dim(adjustedPval))<2) {  #*** handle single input list
+	  adjustedPval<-matrix(adjustedPval,byrow=TRUE,nrow=1)
+	  FTpVal<-matrix(FTpVal,byrow=TRUE,nrow=1)
+	  NegLogCorr<-matrix(NegLogCorr,byrow=TRUE,nrow=1)
+	  NegLogUncorr<-matrix(NegLogUncorr,byrow=TRUE,nrow=1)
+	}
 	if(mean(rowMeans(adjustedPval,na.rm=T),na.rm=T)==1) { this.heatmapScale<-"p.unadj"; addText="-No FDR values lower than 100%"; } else { this.heatmapScale<-heatmapScale; addText=""; }
 	
 	## Use the text function with the FDR filter in labeledHeatmap to add asterisks, e.g. * 
