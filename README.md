@@ -129,3 +129,20 @@ geneListFET(FileBaseName="3.FlyBrainSCgene87SeuratClusters_FET_to_5mammalianBrai
             heatmapTitle="Fly Brain 87 Cluster Overlaps with 5 Mammalian Brain Cell Type Marker Reference Lists",
             modulesInMemory=FALSE,categoriesFile="Fly_Seurat_87cluster_BrainCellTypes.csv",categorySpeciesCode="dmelanogaster",  #use clusters of gene symbols in a provided file, categoriesFile; what species code are the symbols in cleanDat rownames? In case symbol interconversion across species is needed...
             refDataFiles=refDataFiles,speciesCode=c("hsapiens","mmusculus"),refDataDescription="5brainCellTypes")  #file(s) with columns of reference gene lists to check for overlap in; what are the species code(s) for symbols in each file?
+
+
+## Duplicated genes in >1 reference list are not explicitly checked for, nor removed, currently. Instances occur due to different gene splicing isoforms specific to different cell types, e.g.
+#  We provide our human reference list in 3 versions: (1) the reference with maximal duplication n=132 duplicated symbols provided on GitHub originally;
+#                                                     (2) the published reference 5 cell type human list re-converted from mouse symbols using mygene for publication in 2022;
+#                                                     (3) the reference 5 cell types from #2 with the 19 genes duplicated in those removed.
+# These lists are compared (with heatmap output):
+geneListFET(FileBaseName="1.ALSnetFET_duplicationControl",
+            heatmapTitle="ALS Motor Cortex Network Module Overlaps with 5 Brain Cell Type Marker Reference Lists",
+            modulesInMemory=TRUE,categorySpeciesCode="hsapiens",
+            refDataFiles=c("MyGene-Human-SharmaZhangUnion.csv",
+                           "MyGene-Human-SharmaZhangUnion_Published(JohnsonECB_NatNeurosci_2022).csv",
+                           "MyGene-Human-SharmaZhangUnion_Published(JohnsonECB_NatNeurosci_2022)_uniqueONLY.csv"),
+            speciesCode=c("hsapiens","hsapiens","hsapiens"),refDataDescription="5brainCellTypes")
+```
+
+Exact reference lists from Johnson ECB, et al (2022) are now provided as converted from mouse using symbol interspecies lookup using the mygene package, and a version of the lists not published with 19 duplicated genes removed '(uniqueONLY)' is also added to this repository. The above check shows similar significance for enrichments across all 3 of the lists, due to the generally unchanged overlaps, overall.
