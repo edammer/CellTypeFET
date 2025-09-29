@@ -1,5 +1,5 @@
 ###################################################################################################################
-# Cross-species FET modified to optionally adjust for symbol lookup inefficiency/loss
+# Cross-species Gene List Fisher's Exact Test - optionally adjusts for symbol lookup inefficiency/loss
 # by Eric Dammer & Divya Nandakumar
 #-------------------------------------------------------------------------#
 # +2/10/19 improved duplicate removal within and across reference lists
@@ -10,6 +10,9 @@
 # +4/17/23 Added RColorBrewer palette specification to parameter/variable paletteColors (vector of length=# of marker list file inputs),
 #          vector character strings must be one of the sequential (first group) or qualitative (third group) palettes shown by:
 #          RColorBrewer::display.brewer.all()
+# +9/29/25 - Changed error handler to avoid precheck for smaller background (total gene list of inputs or modules) compared to the largest reference list (explicit 2x2 table fisher.text errors shown)
+#          - Added labeledHeatmap automatic white text for significant heatmap cells, so text on top of dark colors is readable; helper functions of WGCNA labeledHeatmap now included here
+#          - Relative file paths for arguments now ok; illegal characters do not propagate to output file names
 #-------------------------------------------------------------------------#
 # revisited to define fly cell types in Seurat 87 lists 2/10/2019
 # Analysis for Laura Volpicelli, mouse a-Syn Bilaterally Injected Brain Regions 2/15/2019
@@ -82,8 +85,8 @@ if(!modulesInMemory) {  # Read in Categories as list
 moduleList=enumeratedLists
 
 
-
-pdf(file=paste0(outputfigs,"/",FileBaseName,".Overlap.in.",refDataDescription,".pdf"),height=15,width=24) 
+refDataDescription.forFilename<-gsub('\\/','.',gsub('\\\\', ".", gsub('\\.\\.','',refDataDescription)))  #avoids invalid PDF filename below with relative path specification
+pdf(file=paste0(outputfigs,"/",FileBaseName,".Overlap.in.",refDataDescription.forFilename,".pdf"),height=15,width=24) 
 ############
 
 #***iterating through multiple files (each one a page of output PDF):  
@@ -237,10 +240,11 @@ for (refDataFile in refDataFiles) {
 	
 	allGenes_cleaned <- na.omit(allGenesNetwork)
 	totProteomeLength <- length(allGenes_cleaned)
-	if(max(sapply(refData,length))>totProteomeLength) {
-	  cat (paste0("One of your reference data lists is larger than the background from the categories (WGCNA or specified categories file--all symbols)!\nUsing the bigger number for Fisher Exact would change all stats. Skipping ",refDataFile,".\n\n"))
-	  next
-	}
+#   fisher.test below now reports specific contingency table causing error, rather than preventing running here.
+#	if(max(sapply(refData,length))>totProteomeLength) {
+#	  cat (paste0("One of your reference data lists is larger than the background from the categories (WGCNA or specified categories file--all symbols)!\nUsing the bigger number for Fisher Exact would change all stats. Skipping ",refDataFile,".\n\n"))
+#	  next
+#	}
 	
 	### Fisher's Exact Test
 	
@@ -296,7 +300,19 @@ for (refDataFile in refDataFiles) {
 			hitLists[i,j]<-paste(overlapGenes,collapse=";")
 			contingency <- matrix(c(numOverlap,otherCategories,notInModule,notInMod_otherCategories),nrow=2,ncol=2,dimnames=list(c("GenesHit","GenesNotHit"),c("withinCategory","inProteome")))
 	#debugging:     if(i==6 & j==3) cat(contingency)
-			FT <- fisher.test(contingency,alternative="greater") #variable with presumed explanatory effect should be the row definitions, if known. (can transpose, but no effect on outcome p values)
+			# variable with presumed explanatory effect should be the row definitions, if known. (can transpose, but no effect on outcome p values)
+			FT <- tryCatch(  # now reports specific contingency table causing error, rather than trying to prevent running with precheck above.
+		                       fisher.test(contingency, alternative = "greater"),
+		                       error = function(e) {
+		                         msg <- paste0(
+		                           "Fisher test failed at module ", i, ", category ", j, "\n",
+		                           "Cause: ", conditionMessage(e), "\n",
+		                           "Contingency table:\n",
+		                           capture.output(print(contingency))
+		                         )
+		                         stop(msg, call. = FALSE)
+		                       }
+		                      )
 			FTpVal[i,j] <- FT$p.value
 			categoryOverlap[i,j] <- numOverlap
 			numCategoryHitsInDataset[i,j] <- numCategoryHitsInProteome
@@ -390,7 +406,8 @@ for (refDataFile in refDataFiles) {
 	#rownames(categoryOverlap)<-categoriesNameMatcher$Annot[match(rownames(categoryOverlap),categoriesNameMatcher$Annot)]
 	
 	outputData <- rbind("FET pValue", FTpVal,"FDR corrected",adjustedPval,"Overlap",categoryOverlap,"CategoryHitsInDataSet(ADJ)",numCategoryHitsInDataset,"CategoryHitsInDataSet(Unadj)",numCategoryHitsInDataset.UNADJ,"OverlappedGeneLists",hitLists)
-	write.csv(outputData,file = paste0(outputtabs,"/",FileBaseName,".Overlap.in.",refDataFile,"-",duplicateHandling,"-hitListStats.csv"))
+        refDataFile.forFilename<-gsub('\\/','.',gsub('\\\\', ".", gsub('\\.\\.','',refDataFile)))  # avoid relative path invalid characters inclusion in csv filename
+	write.csv(outputData,file = paste0(outputtabs,"/",FileBaseName,".Overlap.in.",refDataFile.forFilename,"-",duplicateHandling,"-hitListStats.csv"))
 
 	#auto-check if all FET (BH) calculations = 1, then switch to p value visualization
 		if(length(dim(adjustedPval))<2) {  #*** handle single input list
@@ -432,7 +449,7 @@ for (refDataFile in refDataFiles) {
 	## Plotting
 	if(!barOption) {
 		par(mfrow=c(verticalCompression,1))
-		par( mar = c(9.5, 10, 4.5, 2) ) #bottom, left, top, right #text lines
+		par( mar = c(15, 16, 9, 2) ) #bottom, left, top, right #text lines
 		
 		if(exists("colvec")) suppressWarnings(rm(colvec))
 		
@@ -478,7 +495,25 @@ for (refDataFile in refDataFiles) {
 		if (modulesInMemory) { categoryColorSymbols=paste0("ME",names(moduleList)) } else { if(!length(na.omit(match(orderedLabelsByRelatedness[,2],rownames(NegLogUncorr))))==nrow(orderedLabelsByRelatedness)) { categoryColorSymbols=dummyColors } else { categoryColorSymbols=names(moduleList) } }
 		xSymbolsText= ifelse ( rep(modulesInMemory,length(names(moduleList))), paste0(names(moduleList)," ",orderedModules[match(names(moduleList),orderedModules[,2]),1]), names(moduleList) )
 		if (this.heatmapScale=="p.unadj") {
-		labeledHeatmap(Matrix = FTpVal,
+
+		# Convert matrix values to colors
+		bgColors <- WGCNA::numbers2colors(FTpVal, colors = colvecRamped1,
+		                                  signed = FALSE, lim = c(0, max(FTpVal, na.rm=TRUE)))
+
+		# Convert hex colors to perceived brightness
+		hex2brightness <- function(hex) {
+		  rgb <- col2rgb(hex)
+		  # luminance formula
+		  (0.299*rgb[1,] + 0.587*rgb[2,] + 0.114*rgb[3,]) / 255
+		}
+
+		brightness <- matrix(hex2brightness(bgColors), nrow = nrow(FTpVal))
+
+		## White text if background is dark (<0.5), black otherwise
+		textColors <- ifelse(brightness < 0.5, "white", "black")
+		dim(textColors) = dim(textMatrix.p.unadj)
+
+		labeledHeatmap.txtMatCols(Matrix = FTpVal,
 		               yLabels = names(categories), #refData list elements, ordered by size if that option was on
 		               xLabels = categoryColorSymbols,
 		               xLabelsAngle = 90,
@@ -486,9 +521,11 @@ for (refDataFile in refDataFiles) {
 		               xColorLabels=FALSE,
 		               colors = rev(colvecRamped1),
 		               textMatrix =  textMatrix.p.unadj,
+		               txtMatCols = textColors,
 		               setStdMargins = FALSE,
 		               cex.text = 0.6,
-		               cex.lab.y = 0.7,
+		               cex.lab.x = 1.2,  # new
+		               cex.lab.y = 1.2,  # 0.7
 		               verticalSeparator.x=c(rep(c(1:length(names(moduleList))),nrow(orderedLabelsByRelatedness))),
 		               verticalSeparator.col = 1,
 		               verticalSeparator.lty = 1,
@@ -500,12 +537,30 @@ for (refDataFile in refDataFiles) {
 		               horizontalSeparator.lwd = 1,
 		               horizontalSeparator.ext = 0,
 		               zlim = c(min(FTpVal),1),
-		               main = paste0("Enrichment of ",this.heatmapTitle,"\nof ",refDataFile," Marker Lists by Gene Symbol (",duplicateHandling,")\nHeatmap: Fisher Exact p value, Uncorrected\n (p-values shown",addText,")"),
-		               cex.main=0.8)
+		               main = paste0("Enrichment of ",this.heatmapTitle,"\nof ",refDataFile," Marker Lists by Gene Symbol (",duplicateHandling,")\nHeatmap: Fisher Exact p value, Uncorrected\n (p-values shown",addText,")\n"),
+		               cex.main=1.75)  # 0.8
 		}
 		
 		if (this.heatmapScale=="minusLogFDR") {
-		labeledHeatmap(Matrix = NegLogCorr,
+
+		# Convert matrix values to colors
+		bgColors <- WGCNA::numbers2colors(NegLogCorr, colors = colvecRamped1,
+		                                  signed = FALSE, lim = c(0, max(NegLogCorr, na.rm=TRUE)))
+
+		# Convert hex colors to perceived brightness
+		hex2brightness <- function(hex) {
+		  rgb <- col2rgb(hex)
+		  # luminance formula
+		  (0.299*rgb[1,] + 0.587*rgb[2,] + 0.114*rgb[3,]) / 255
+		}
+
+		brightness <- matrix(hex2brightness(bgColors), nrow = nrow(NegLogCorr))
+
+		## White text if background is dark (<0.5), black otherwise
+		textColors <- ifelse(brightness < 0.5, "white", "black")
+		dim(textColors) = dim(textMatrix1)
+
+		labeledHeatmap.txtMatCols(Matrix = NegLogCorr,
 		               yLabels = names(categories), #refData list elements, ordered by size if that option was on
 		               xLabels = categoryColorSymbols,
 		               xLabelsAngle = 90,
@@ -513,9 +568,11 @@ for (refDataFile in refDataFiles) {
 		               xColorLabels=FALSE,
 		               colors = colvecRamped1,
 		               textMatrix = textMatrix1, #signif(adjustedPval, 2),
+		               txtMatCols = textColors,  #white/black overlay, depending on brightness (argument supported in custom function implemented here, from WGCNA source on 9/29/2025)
 		               setStdMargins = FALSE,
 		               cex.text = 0.6,
-		               cex.lab.y = 0.7,
+		               cex.lab.x = 1.5,  # new
+		               cex.lab.y = 1.5,  # 0.7
 		               verticalSeparator.x=c(rep(c(1:length(names(moduleList))),nrow(orderedLabelsByRelatedness))),
 		               verticalSeparator.col = 1,
 		               verticalSeparator.lty = 1,
@@ -528,11 +585,11 @@ for (refDataFile in refDataFiles) {
 		               horizontalSeparator.ext = 0,
 		               zlim = c(0,max(NegLogCorr,na.rm=TRUE)),
 		               main = paste0("Enrichment of ",this.heatmapTitle,"\nof ",refDataFile," Marker Lists by Gene Symbol (",duplicateHandling,")\nHeatmap: -log(p), BH Corrected\n (Corrected p-values, FDR, shown)"), #*** Uncorrected\n (p-values shown)"),
-		               cex.main=0.8)
+		               cex.main=1.75)  # 0.8
 		}
 	} else {  #if barOption==TRUE:  PLOT BAR PLOTS FOR EACH REFERENCE LIST
 		par(mfrow=c(verticalCompression,2))
-		par(mar=c(15,7,4,1))
+		par(mar=c(15,7,4.5,1))
 	
 		moduleColors= if (modulesInMemory) { names(moduleList) } else { "bisque4" }  # if (modulesInMemory), expect colors for names(moduleList)
 		xSymbolsText= ifelse ( rep(modulesInMemory,length(names(moduleList))), paste0(names(moduleList)," ",orderedModules[match(names(moduleList),orderedModules[,2]),1]), names(moduleList) )
@@ -563,4 +620,802 @@ for (refDataFile in refDataFiles) {
 	#+#+#+#+#+#+#+#+#+#+#+#+#+
 } #end for(refDataFile ...
 dev.off()
+}
+
+
+
+labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols = NULL, ySymbols = NULL, 
+    colorLabels = NULL, xColorLabels = FALSE, yColorLabels = FALSE, 
+    checkColorsValid = TRUE, invertColors = FALSE, setStdMargins = TRUE, 
+    xLabelsPosition = "bottom", xLabelsAngle = 45, xLabelsAdj = 1, 
+    yLabelsPosition = "left", xColorWidth = 2 * strheight("M"), 
+    yColorWidth = 2 * strwidth("M"), xColorOffset = strheight("M")/3, 
+    yColorOffset = strwidth("M")/3, colorMatrix = NULL, 
+    colors = NULL, naColor = "grey", textMatrix = NULL, 
+    cex.text = NULL, textAdj = c(0.5, 0.5), cex.lab = NULL, cex.lab.x = cex.lab, 
+    cex.lab.y = cex.lab, colors.lab.x = 1, colors.lab.y = 1, 
+    font.lab.x = 1, font.lab.y = 1, bg.lab.x = NULL, bg.lab.y = NULL, 
+    x.adj.lab.y = 1, plotLegend = TRUE, keepLegendSpace = plotLegend, 
+    verticalSeparator.x = NULL, verticalSeparator.col = 1, verticalSeparator.lty = 1, 
+    verticalSeparator.lwd = 1, verticalSeparator.ext = 0, verticalSeparator.interval = 0, 
+    horizontalSeparator.y = NULL, horizontalSeparator.col = 1, 
+    horizontalSeparator.lty = 1, horizontalSeparator.lwd = 1, 
+    horizontalSeparator.ext = 0, horizontalSeparator.interval = 0, 
+    showRows = NULL, showCols = NULL, txtMatCols = "black", cex.main=1.5, ...) 
+{
+    textFnc = match.fun("text")
+    if (!is.null(colorLabels)) {
+        xColorLabels = colorLabels
+        yColorLabels = colorLabels
+    }
+    if (is.null(yLabels) & (!is.null(xLabels)) & (dim(Matrix)[1] == 
+        dim(Matrix)[2])) 
+        yLabels = xLabels
+    nCols = ncol(Matrix)
+    nRows = nrow(Matrix)
+    if (length(xLabels) != nCols) 
+        stop("Length of 'xLabels' must equal the number of columns in 'Matrix.'")
+    if (length(yLabels) != nRows) 
+        stop("Length of 'yLabels' must equal the number of rows in 'Matrix.'")
+    if (is.null(showRows)) 
+        showRows = c(1:nRows)
+    if (is.null(showCols)) 
+        showCols = c(1:nCols)
+    nShowCols = length(showCols)
+    nShowRows = length(showRows)
+    if (nShowCols == 0) 
+        stop("'showCols' is empty.")
+    if (nShowRows == 0) 
+        stop("'showRows' is empty.")
+    if (checkColorsValid) {
+        xValidColors = !is.na(match(substring(xLabels, 3), colors()))
+        yValidColors = !is.na(match(substring(yLabels, 3), colors()))
+    }
+    else {
+        xValidColors = rep(TRUE, length(xLabels))
+        yValidColors = rep(TRUE, length(yLabels))
+    }
+    if (sum(xValidColors) > 0) 
+        xColorLabInd = xValidColors[showCols]
+    if (sum(!xValidColors) > 0) 
+        xTextLabInd = !xValidColors[showCols]
+    if (sum(yValidColors) > 0) 
+        yColorLabInd = yValidColors[showRows]
+    if (sum(!yValidColors) > 0) 
+        yTextLabInd = !yValidColors[showRows]
+    if (setStdMargins) {
+        if (xColorLabels & yColorLabels) {
+            par(mar = c(2, 2, 3, 5) + 0.2)
+        }
+        else {
+            par(mar = c(7, 7, 3, 5) + 0.2)
+        }
+    }
+    xLabels.show = xLabels[showCols]
+    yLabels.show = yLabels[showRows]
+    if (!is.null(xSymbols)) {
+        if (length(xSymbols) != nCols) 
+            stop("When 'xSymbols' are given, their length must equal the number of columns in 'Matrix.'")
+        xSymbols.show = xSymbols[showCols]
+    }
+    else xSymbols.show = NULL
+    if (!is.null(ySymbols)) {
+        if (length(ySymbols) != nRows) 
+            stop("When 'ySymbols' are given, their length must equal the number of rows in 'Matrix.'")
+        ySymbols.show = ySymbols[showRows]
+    }
+    else ySymbols.show = NULL
+    xLabPos = charmatch(xLabelsPosition, c("bottom", "top"))
+    if (is.na(xLabPos)) 
+        stop("Argument 'xLabelsPosition' must be (a unique abbreviation of) 'bottom', 'top'")
+    yLabPos = charmatch(yLabelsPosition, c("left", "right"))
+    if (is.na(yLabPos)) 
+        stop("Argument 'yLabelsPosition' must be (a unique abbreviation of) 'left', 'right'")
+    if (is.null(colors)) 
+        colors = heat.colors(30)
+    if (invertColors) 
+        colors = rev(colors)
+    labPos = .heatmapWithLegend(Matrix[showRows, showCols, drop = FALSE], 
+        signed = FALSE, colorMatrix = colorMatrix, colors = colors, 
+        naColor = naColor, cex.legendLabel = cex.main, plotLegend = plotLegend, 
+        keepLegendSpace = keepLegendSpace, ...)
+    plotbox = labPos$box
+    xmin = plotbox[1]
+    xmax = plotbox[2]
+    ymin = plotbox[3]
+    yrange = plotbox[4] - ymin
+    ymax = plotbox[4]
+    xrange = xmax - xmin
+    xLeft = labPos$xLeft
+    xRight = labPos$xRight
+    yTop = labPos$yTop
+    yBot = labPos$yBot
+    xspacing = labPos$xMid[2] - labPos$xMid[1]
+    yspacing = abs(labPos$yMid[2] - labPos$yMid[1])
+    offsetx = .extend(xColorOffset, nCols)[showCols]
+    offsety = .extend(yColorOffset, nRows)[showRows]
+    xColW = xColorWidth
+    yColW = yColorWidth
+    textOffsetY = strheight("M") * cos(xLabelsAngle/180 * 
+        pi)
+    if (any(xValidColors)) 
+        offsetx = offsetx + xColW
+    if (any(yValidColors)) 
+        offsety = offsety + yColW
+    extension.left = par("mai")[2] * par("cxy")[1]/par("cin")[1]
+    extension.right = par("mai")[4] * par("cxy")[1]/par("cin")[1]
+    extension.bottom = par("mai")[1] * par("cxy")[2]/par("cin")[2] - 
+        offsetx
+    extension.top = par("mai")[3] * par("cxy")[2]/par("cin")[2] - 
+        offsetx
+    figureBox = par("usr")
+    figXrange = figureBox[2] - figureBox[1]
+    figYrange = figureBox[4] - figureBox[3]
+    if (!is.null(bg.lab.x)) {
+        bg.lab.x = .extend(bg.lab.x, nCols)[showCols]
+        if (xLabPos == 1) {
+            y0 = ymin
+            ext = extension.bottom
+            sign = 1
+        }
+        else {
+            y0 = ymax
+            ext = extension.top
+            sign = -1
+        }
+        figureDims = par("pin")
+        angle = xLabelsAngle/180 * pi
+        ratio = figureDims[1]/figureDims[2] * figYrange/figXrange
+        ext.x = -sign * ext * 1/tan(angle)/ratio
+        ext.y = sign * ext * sign(sin(angle))
+        offset = offsetx + textOffsetY
+        for (cc in 1:nShowCols) polygon(x = c(xLeft[cc], xLeft[cc], 
+            xLeft[cc] + ext.x, xRight[cc] + ext.x, xRight[cc], 
+            xRight[cc]), y = c(y0, y0 - sign * offset[cc], y0 - 
+            sign * offset[cc] - ext.y, y0 - sign * offset[cc] - 
+            ext.y, y0 - sign * offset[cc], y0), border = bg.lab.x[cc], 
+            col = bg.lab.x[cc], xpd = TRUE)
+    }
+    if (!is.null(bg.lab.y)) {
+        bg.lab.y = .extend(bg.lab.y, nRows)
+        reverseRows = TRUE
+        if (reverseRows) 
+            bg.lab.y = rev(bg.lab.y)
+        bg.lab.y = bg.lab.y[showRows]
+        if (yLabPos == 1) {
+            xl = xmin - extension.left
+            xr = xmin
+        }
+        else {
+            xl = xmax
+            xr = xmax + extension.right
+        }
+        for (r in 1:nShowRows) rect(xl, yBot[r], xr, yTop[r], 
+            col = bg.lab.y[r], border = bg.lab.y[r], xpd = TRUE)
+    }
+    colors.lab.x = .extend(colors.lab.x, nCols)[showCols]
+    font.lab.x = .extend(font.lab.x, nCols)[showCols]
+    if (sum(!xValidColors) > 0) {
+        xLabYPos = if (xLabPos == 1) 
+            ymin - offsetx - textOffsetY
+        else ymax + offsetx + textOffsetY
+        if (is.null(cex.lab)) 
+            cex.lab = 1
+        mapply(textFnc, x = labPos$xMid[xTextLabInd], y = xLabYPos, 
+            labels = xLabels.show[xTextLabInd], col = colors.lab.x[xTextLabInd], 
+            font = font.lab.x[xTextLabInd], MoreArgs = list(srt = xLabelsAngle, 
+                adj = xLabelsAdj, xpd = TRUE, cex = cex.lab.x))
+    }
+    if (sum(xValidColors) > 0) {
+        baseY = if (xLabPos == 1) 
+            ymin - offsetx
+        else ymax + offsetx
+        deltaY = if (xLabPos == 1) 
+            xColW
+        else -xColW
+        rect(xleft = labPos$xMid[xColorLabInd] - xspacing/2, 
+            ybottom = baseY[xColorLabInd], xright = labPos$xMid[xColorLabInd] + 
+                xspacing/2, ytop = baseY[xColorLabInd] + deltaY, 
+            density = -1, col = substring(xLabels.show[xColorLabInd], 
+                3), border = substring(xLabels.show[xColorLabInd], 
+                3), xpd = TRUE)
+        if (!is.null(xSymbols)) 
+            mapply(textFnc, x = labPos$xMid[xColorLabInd], y = baseY[xColorLabInd] - 
+                textOffsetY - sign(deltaY) * strwidth("M")/3, 
+                labels = xSymbols.show[xColorLabInd], col = colors.lab.x[xColorLabInd], 
+                font = font.lab.x[xColorLabInd], MoreArgs = list(adj = xLabelsAdj, 
+                  xpd = TRUE, srt = xLabelsAngle, cex = cex.lab.x))
+    }
+    x.adj.lab.y = .extend(x.adj.lab.y, nRows)[showRows]
+    if (yLabPos == 1) {
+        marginWidth = par("mai")[2]/par("pin")[1] * 
+            xrange
+    }
+    else {
+        marginWidth = par("mai")[4]/par("pin")[1] * 
+            xrange
+    }
+    xSpaceForYLabels = marginWidth - 2 * strwidth("M")/3 - 
+        ifelse(yValidColors[showRows], yColW, 0)
+    xPosOfYLabels.relative = xSpaceForYLabels * (1 - x.adj.lab.y) + 
+        offsety
+    colors.lab.y = .extend(colors.lab.y, nRows)[showRows]
+    font.lab.y = .extend(font.lab.y, nRows)[showRows]
+    if (sum(!yValidColors) > 0) {
+        if (is.null(cex.lab)) 
+            cex.lab = 1
+        if (yLabPos == 1) {
+            x = xmin - strwidth("M")/3 - xPosOfYLabels.relative[yTextLabInd]
+            adj = x.adj.lab.y[yTextLabInd]
+        }
+        else {
+            x = xmax + strwidth("M")/3 + xPosOfYLabels.relative[yTextLabInd]
+            adj = 1 - x.adj.lab.y[yTextLabInd]
+        }
+        mapply(textFnc, y = labPos$yMid[yTextLabInd], labels = yLabels.show[yTextLabInd], 
+            adj = lapply(adj, c, 0.5), x = x, col = colors.lab.y[yTextLabInd], 
+            font = font.lab.y[yTextLabInd], MoreArgs = list(srt = 0, 
+                xpd = TRUE, cex = cex.lab.y))
+    }
+    if (sum(yValidColors) > 0) {
+        if (yLabPos == 1) {
+            xl = xmin - offsety
+            xr = xmin - offsety + yColW
+            xtext = xmin - strwidth("M")/3 - xPosOfYLabels.relative[yColorLabInd]
+            adj = x.adj.lab.y[yColorLabInd]
+        }
+        else {
+            xl = xmax + offsety - yColW
+            xr = xmax + offsety
+            xtext = xmin + strwidth("M")/3 + xPosOfYLabels.relative[yColorLabInd]
+            adj = 1 - x.adj.lab.y[yColorLabInd]
+        }
+        rect(xleft = xl[yColorLabInd], ybottom = rev(labPos$yMid[yColorLabInd]) - 
+            yspacing/2, xright = xr[yColorLabInd], ytop = rev(labPos$yMid[yColorLabInd]) + 
+            yspacing/2, density = -1, col = substring(rev(yLabels.show[yColorLabInd]), 
+            3), border = substring(rev(yLabels.show[yColorLabInd]), 
+            3), xpd = TRUE)
+        if (!is.null(ySymbols)) 
+            mapply(textFnc, y = labPos$yMid[yColorLabInd], labels = ySymbols.show[yColorLabInd], 
+                adj = lapply(adj, c, 0.5), x = xtext, col = colors.lab.y[yColorLabInd], 
+                font = font.lab.y[yColorLabInd], MoreArgs = list(srt = 0, 
+                  xpd = TRUE, cex = cex.lab.y))
+    }
+    showCols.ext = c(if (1 %in% showCols) 0 else NULL, showCols)
+    showCols.shift = if (0 %in% showCols.ext) 
+        1
+    else 0
+    if (length(verticalSeparator.x) > 0) {
+        if (any(verticalSeparator.x < 0 | verticalSeparator.x > 
+            nCols)) 
+            stop("If given. 'verticalSeparator.x' must all be between 0 and the number of columns.")
+        colSepShowIndex = which(verticalSeparator.x %in% showCols.ext)
+        verticalSeparator.x.show = .restrictIndex(verticalSeparator.x, 
+            showCols.ext) - showCols.shift
+    }
+    else if (verticalSeparator.interval > 0) {
+        verticalSeparator.x.show = verticalSeparator.x = seq(from = verticalSeparator.interval, 
+            by = verticalSeparator.interval, length.out = floor(length(showCols)/verticalSeparator.interval))
+        colSepShowIndex = 1:length(verticalSeparator.x)
+    }
+    else verticalSeparator.x.show = NULL
+    if (length(verticalSeparator.x.show) > 0) {
+        nLines = length(verticalSeparator.x)
+        vs.col = .extend(verticalSeparator.col, nLines)[colSepShowIndex]
+        vs.lty = .extend(verticalSeparator.lty, nLines)[colSepShowIndex]
+        vs.lwd = .extend(verticalSeparator.lwd, nLines)[colSepShowIndex]
+        vs.ext = .extend(verticalSeparator.ext, nLines)[colSepShowIndex]
+        x.lines = ifelse(verticalSeparator.x.show > 0, labPos$xRight[verticalSeparator.x.show], 
+            labPos$xLeft[1])
+        nLines.show = length(verticalSeparator.x.show)
+        for (l in 1:nLines.show) lines(rep(x.lines[l], 2), c(ymin, 
+            ymax), col = vs.col[l], lty = vs.lty[l], lwd = vs.lwd[l])
+        angle = xLabelsAngle/180 * pi
+        if (angle == 0) 
+            angle = pi/2
+        if (xLabelsPosition == "bottom") {
+            sign = 1
+            y0 = ymin
+            ext = extension.bottom
+        }
+        else {
+            sign = -1
+            y0 = ymax
+            ext = extension.top
+        }
+        figureDims = par("pin")
+        ratio = figureDims[1]/figureDims[2] * figYrange/figXrange
+        ext.x = -sign * ext * 1/tan(angle)/ratio
+        ext.y = sign * ext * sign(sin(angle))
+        offset = offsetx + textOffsetY
+        for (l in 1:nLines.show) lines(c(x.lines[l], x.lines[l], 
+            x.lines[l] + vs.ext[l] * ext.x[l]), c(y0, y0 - sign * 
+            offset[l], y0 - sign * offset[l] - vs.ext[l] * ext.y[l]), 
+            col = vs.col[l], lty = vs.lty[l], lwd = vs.lwd[l], 
+            xpd = TRUE)
+    }
+    showRows.ext = c(if (1 %in% showRows) 0 else NULL, showRows)
+    showRows.shift = if (0 %in% showRows.ext) 
+        1
+    else 0
+    if (length(horizontalSeparator.y) > 0) {
+        if (any(horizontalSeparator.y < 0 | horizontalSeparator.y > 
+            nRows)) 
+            stop("If given. 'horizontalSeparator.y' must all be between 0 and the number of rows.")
+        rowSepShowIndex = which(horizontalSeparator.y %in% showRows.ext)
+        horizontalSeparator.y.show = .restrictIndex(horizontalSeparator.y, 
+            showRows.ext) - showRows.shift
+    }
+    else if (horizontalSeparator.interval > 0) {
+        horizontalSeparator.y.show = horizontalSeparator.y = seq(from = horizontalSeparator.interval, 
+            by = horizontalSeparator.interval, length.out = floor(length(showRows)/horizontalSeparator.interval))
+        rowSepShowIndex = 1:length(horizontalSeparator.y)
+    }
+    else horizontalSeparator.y.show = NULL
+    if (length(horizontalSeparator.y.show) > 0) {
+        reverseRows = TRUE
+        if (reverseRows) {
+            horizontalSeparator.y.show = nShowRows - horizontalSeparator.y.show + 
+                1
+            y.lines = ifelse(horizontalSeparator.y.show <= nShowRows, 
+                labPos$yBot[horizontalSeparator.y.show], labPos$yTop[nShowRows])
+        }
+        else {
+            y.lines = ifelse(horizontalSeparator.y.show > 0, 
+                labPos$yBot[horizontalSeparator.y.show], labPos$yTop[1])
+        }
+        nLines = length(horizontalSeparator.y)
+        vs.col = .extend(horizontalSeparator.col, nLines)[rowSepShowIndex]
+        vs.lty = .extend(horizontalSeparator.lty, nLines)[rowSepShowIndex]
+        vs.lwd = .extend(horizontalSeparator.lwd, nLines)[rowSepShowIndex]
+        vs.ext = .extend(horizontalSeparator.ext, nLines)[rowSepShowIndex]
+        nLines.show = length(horizontalSeparator.y.show)
+        for (l in 1:nLines.show) {
+            if (yLabPos == 1) {
+                xl = xmin - vs.ext[l] * extension.left
+                xr = xmax
+            }
+            else {
+                xl = xmin
+                xr = xmax + vs.ext[l] * extension.right
+            }
+            lines(c(xl, xr), rep(y.lines[l], 2), col = vs.col[l], 
+                lty = vs.lty[l], lwd = vs.lwd[l], xpd = TRUE)
+        }
+    }
+    if (!is.null(textMatrix)) {
+        if (is.null(cex.text)) 
+            cex.text = par("cex")
+        if (is.null(dim(textMatrix))) 
+            if (length(textMatrix) == prod(dim(Matrix))) 
+                dim(textMatrix) = dim(Matrix)
+        if (is.null(dim(txtMatCols))) {
+            txtMatCols=rep(txtMatCols[1],dim(textMatrix)[1]*dim(textMatrix)[2])
+            dim(txtMatCols) = dim(txtMatrix)
+        }
+        if (!isTRUE(all.equal(dim(textMatrix), dim(Matrix)))) 
+            stop("labeledHeatmap: textMatrix was given, but has dimensions incompatible with Matrix.")
+        for (rw in 1:nShowRows) for (cl in 1:nShowCols) {
+            text(labPos$xMid[cl], labPos$yMid[rw], as.character(textMatrix[showRows[rw], 
+                showCols[cl] ]), col=txtMatCols[rw,cl], xpd = TRUE, cex = cex.text, adj = textAdj)
+        }
+    }
+    axis(1, labels = FALSE, tick = FALSE)
+    axis(2, labels = FALSE, tick = FALSE)
+    axis(3, labels = FALSE, tick = FALSE)
+    axis(4, labels = FALSE, tick = FALSE)
+    invisible(labPos)
+}
+
+
+.heatmapWithLegend = function(data, signed, 
+                     colorMatrix = NULL,
+                     colors, naColor = "grey", zlim = NULL, 
+                     reverseRows = TRUE,
+                     plotLegend = TRUE,
+                     keepLegendSpace = plotLegend,
+                     cex.legendAxis = 1, 
+                     legendShrink = 0.94,
+                     legendPosition = 0.5, ## center; 1 means at the top, 0 means at the bottom
+                     legendLabel = "",
+                     cex.legendLabel = 1,
+                     ## The following arguments are now in inches
+                     legendSpace = 0.5 + (as.character(legendLabel)!="") * 1.5*
+                            strheight("M",units = "inch", cex = cex.legendLabel),   
+                     legendWidth = 0.13,
+                     legendGap = 0.09,
+                     maxLegendSize = 4,
+                     legendLengthGap = 0.15,
+                     frame = TRUE,
+                     frameTicks = FALSE, tickLen = 0.09,
+                     tickLabelAngle = 0,
+                     ...)
+{
+ 
+  if (length(naColor)==0) naColor = 0;  ### Means transparent (as opposed to white) color.
+  data = as.matrix(data); nCols = ncol(data); nRows = nrow(data);
+  if (is.null(zlim)) 
+  {
+    zlim = range(data, na.rm = TRUE);
+    if (signed) zlim = c(-max(abs(zlim)), max(abs(zlim)));
+  }
+
+  barplot(1, col = "white", border = "white", axisnames = FALSE,
+                  axes = FALSE, ...);
+
+  pin = par("pin");
+  box = par("usr");
+  xminAll = box[1]; 
+  xmaxAll = box[2]; 
+  yminAll = box[3]; 
+  ymaxAll = box[4]; 
+
+  legendSpace.usr = legendSpace/pin[1] * (xmaxAll-xminAll);
+  legendWidth.usr = legendWidth/pin[1] * (xmaxAll-xminAll);
+  legendGap.usr = legendGap/pin[1] * (xmaxAll-xminAll);
+  tickLen.usr = tickLen/pin[1] * (xmaxAll-xminAll);
+  maxLegendSize.usr = maxLegendSize/pin[2] * (ymaxAll-yminAll);
+  legendLengthGap.usr = legendLengthGap/pin[2] * (ymaxAll-yminAll)
+
+  if (!keepLegendSpace && !plotLegend)
+  {
+     legendSpace.usr = 0;
+     legendWidth.usr = 0;
+     legendGap.usr = 0;
+  }
+
+  ymin = yminAll; 
+  ymax = ymaxAll; 
+  xmin = xminAll; 
+  xmax = xmaxAll - legendSpace.usr;
+  if (xmax < xmin) stop("'legendSpace is too large, not enough space for the heatmap."); 
+
+  xStep = (xmax - xmin)/nCols; 
+  xLeft = xmin + c(0:(nCols-1)) * xStep;
+  xRight = xLeft + xStep; 
+  xMid = (xLeft + xRight)/2;
+
+  yStep = (ymax - ymin)/nRows; yBot  = ymin + c(0:(nRows-1)) * yStep;
+  yTop  = yBot + yStep; yMid = c(yTop+ yBot)/2;
+
+  
+  if (is.null(colorMatrix))
+    colorMatrix = numbers2colors(data, signed, colors = colors, lim = zlim, naColor = naColor)
+  dim(colorMatrix) = dim(data);
+  if (reverseRows)
+    colorMatrix = .reverseRows(colorMatrix);
+  for (c in 1:nCols)
+  {
+    rect(xleft = rep(xLeft[c], nRows), xright = rep(xRight[c], nRows),
+         ybottom = yBot, ytop = yTop, col = ifelse(colorMatrix[, c]==0, 0, colorMatrix[, c]), 
+                border = ifelse(colorMatrix[, c]==0, 0, colorMatrix[, c]));
+    ## Note: the ifelse seems superfluous here but it essentially converts a potentially character "0" to the number 0
+    ## which the plotting system should understand as transparent color.
+  }
+
+  if (frame) lines( c(xmin, xmax, xmax, xmin, xmin), c(ymin, ymin, ymax, ymax, ymin) );
+
+  if (plotLegend)
+  {
+      # Now plot the legend.
+      legendSize.usr = legendShrink * (ymaxAll - yminAll);
+      if (legendSize.usr > maxLegendSize.usr) legendSize.usr = maxLegendSize.usr
+      if (legendLengthGap.usr > 0.5*(ymaxAll - yminAll)*(1-legendShrink)) 
+          legendLengthGap.usr = 0.5*(ymaxAll - yminAll)*(1-legendShrink);
+      y0 = yminAll + legendLengthGap.usr;
+      y1 = ymaxAll - legendLengthGap.usr;
+      movementRange = (y1-y0 - legendSize.usr);
+      if (movementRange < -1e-10) {browser(".heatmapWithLegend: movementRange is negative."); movementRange = 0;}
+      ymin.leg = y0 + legendPosition * movementRange;
+      ymax.leg = y0 + legendPosition * movementRange + legendSize.usr
+      legendPosition = .plotColorLegend(xmin = xmaxAll - (legendSpace.usr - legendGap.usr),
+                       xmax = xmaxAll - (legendSpace.usr - legendGap.usr - legendWidth.usr),
+                       ymin = ymin.leg,
+                       ymax =  ymax.leg,
+                       lim = zlim,
+                       colors = colors,
+                       tickLen.usr = tickLen.usr,
+                       cex.axis = cex.legendAxis,
+                       lab = legendLabel,
+                       cex.lab = cex.legendLabel,
+                       tickLabelAngle = tickLabelAngle
+                       );
+    
+  } else legendPosition = NULL
+
+  invisible(list(xMid = xMid, yMid = if (reverseRows) rev(yMid) else yMid, 
+       box = c(xmin, xmax, ymin, ymax), xLeft = xLeft, xRight = xRight,
+       yTop = yTop, yBot = yBot,
+       legendPosition = legendPosition));
+  
+}
+
+
+.reverseRows = function(Matrix)
+{
+  ind = seq(from=dim(Matrix)[1], to=1, by=-1);
+  Matrix[ind,, drop = FALSE];
+  #Matrix
+}
+
+.extend = function(x, n)
+{
+  nRep = ceiling(n/length(x));
+  rep(x, nRep)[1:n];
+}
+
+# Adapt a numeric index to a subset
+# Aim: if 'index' is a numeric index of special entries of a vector,
+#    create a new index that references 'subset' elements of the vector  
+.restrictIndex = function(index, subset)
+{
+  out = match(index, subset);
+  out[!is.na(out)];
+}
+
+
+.autoTicks = function(min, max, maxTicks = 6, tickPos = c(1,2,5))
+{
+  if (max < min) { x = max; max = min; min = x }
+  range = max - min;
+  if (range==0) return(max);
+  tick0 = range/(maxTicks+1-1e-6)
+  maxTick = max(tickPos);
+  # Ticks can only be multiples of tickPos
+  mult = 1;
+  if (tick0 < maxTick/10)
+  {
+     while (tick0 < maxTick/10) {tick0 = 10*tick0; mult = mult*10; }
+  } else
+     while (tick0 >=maxTick ) {tick0 = tick0/10; mult = mult/10; }
+
+  ind = sum(tick0 > tickPos) + 1;
+  tickStep = tickPos[ind] / mult;
+
+  lowTick = min/tickStep;
+  if (floor(lowTick)!=lowTick) lowTick = lowTick + 1;
+  lowTick = floor(lowTick);
+
+  ticks = tickStep * (lowTick:(lowTick + maxTicks+1));
+  ticks = ticks[ticks <= max];
+  ticks;
+}
+
+.plotStandaloneLegend = function(
+                            colors,
+                            lim,
+                            ## These dimensions are in inches
+                            tickLen = 0.09,
+                            tickGap = 0.04,
+                            minBarWidth = 0.09,
+                            maxBarWidth = Inf,
+                            mar = c(0.5, 0.2, 0.5, 0.1),
+                            lab = "",
+                            horizontal = FALSE,
+                            ...)
+{
+  par(mar = mar);
+  plot(c(0, 1), c(0, 1), type = "n", axes = FALSE, xlab = "", ylab = "");
+  box = par("usr");
+  if (horizontal) box.eff = box[c(3,4,1,2)] else box.eff = box;
+  tickVal = .autoTicks(lim[1], lim[2]);
+  pin = par("pin");
+  pin.eff = if (horizontal) pin[c(2,1)] else pin;
+  wrange = box.eff[2] - box.eff[1];
+  tickLen.usr = tickLen/pin.eff[1] * wrange
+  tickGap.usr = tickGap/pin.eff[1] * wrange
+  minBarWidth.usr = minBarWidth/pin.eff[1] * wrange
+  maxBarWidth.usr = maxBarWidth/pin.eff[1] * wrange
+  sizeFnc = if (horizontal) strheight else strwidth;
+  maxTickWidth = max(sizeFnc(tickVal));
+  if (maxTickWidth + tickLen.usr + tickGap.usr > box.eff[2]-box.eff[1]-minBarWidth.usr) 
+     warning("Some tick labels will be truncated.");
+  haveLab = length(lab) > 0
+  if (haveLab && is.character(lab)) haveLab = lab!="";
+  width = max(box.eff[2]-box.eff[1]-maxTickWidth - tickLen.usr - tickGap.usr- haveLab * 3*sizeFnc("M"), minBarWidth.usr);
+  if (width > maxBarWidth.usr) width = maxBarWidth.usr;
+  .plotColorLegend(box[1], if (horizontal) box[2] else box[1] + width,
+                   if (horizontal) box[4]-width else box[3], box[4], 
+                   colors = colors,
+                   lim = lim,
+                   tickLen.usr = tickLen.usr, horizontal = horizontal,
+                   tickGap.usr = tickGap.usr, lab = lab, ...);
+}
+
+if (FALSE)
+{
+   source("~/Work/RLibs/WGCNA/R/heatmapWithLegend.R")
+   .plotStandaloneLegend(colors = blueWhiteRed(10), lim = c(-25, 25))
+   d = matrix(rnorm(100), 10, 10);
+   par(mar = c(2,2,2,0));
+   
+   .heatmapWithLegend(d,
+                     signed = TRUE,
+                     colors = blueWhiteRed(20), 
+                     plotLegend = TRUE,
+                     cex.legendAxis = 1,
+                     legendShrink = 0.94,
+                     legendLabel = "",
+                     cex.legendLabel = 1)
+                     ## The following arguments are now in inches
+                     #legendSpace = 0.5 + (legendLabel!="") * 1.5*strheight("M",units = "inch", cex = cex.legendLabel),
+                     #legendWidth = 0.13,
+                     #legendGap = 0.09,
+                     #frame = TRUE,
+                     #frameTicks = FALSE, tickLen = 0.09);
+
+}
+
+.plotColorLegend = function(xmin, xmax, ymin, ymax,
+                            # colors can be a vector or a matrix (in which case a matrix of colors will be plotted)
+                            colors,
+                            horizontal = FALSE,
+### FIXME: it would be good if these could respect settings in par("mgp")
+                            tickLen.usr = 0.5* (if (horizontal) strheight("M") else strwidth("M")),
+                            tickGap.usr = 0.5 * (if (horizontal) strheight("M") else strwidth("M")),
+                            lim, cex.axis = 1, tickLabelAngle = if (horizontal) 0 else -90,
+                            lab = "", cex.lab = 1, labAngle = 0, 
+                            labGap = 0.6 * (if (horizontal) strheight("M") else strwidth("M"))
+                            )
+{
+  tickVal = .autoTicks(lim[1], lim[2]);
+  nTicks = length(tickVal);
+
+  if (horizontal) {
+    lmin = xmin; lmax = xmax; 
+    tmin = ymin; tmax = ymax;
+  } else {
+    tmin = xmin; tmax = xmax; 
+    lmin = ymin; lmax = ymax;
+  }
+  tickPos = (tickVal - lim[1]) / (lim[2] - lim[1]) * (lmax - lmin) + lmin;
+  pin = par("pin");
+  box = par("usr");
+  asp = pin[2]/pin[1] * ( box[2]-box[1])/(box[4] - box[3]);
+  # Ticks:
+  
+  if (horizontal) {
+    angle0 = 0;
+    angle = angle0 + tickLabelAngle;
+    if (angle==0) adj = c(0.5, 1) else adj = c(1, 0.5);
+    for (t in 1:nTicks) 
+      lines(c(tickPos[t], tickPos[t]), c(ymin, ymin - tickLen.usr), xpd = TRUE);
+    text(tickPos, rep(ymin - tickLen.usr - tickGap.usr), tickVal, adj = adj, cex = cex.axis,
+           xpd = TRUE, srt = angle);
+    tickLabelWidth = if (angle==0) max(strheight(tickVal)) else max(strwidth(tickVal))/asp;
+  } else {
+    angle0 = 90;
+    angle = angle0 + tickLabelAngle;
+    if (angle==0) adj = c(0, 0.5) else adj = c(0.5, 1);
+    for (t in 1:nTicks) 
+      lines(c(xmax, xmax + tickLen.usr), c(tickPos[t], tickPos[t]), xpd = TRUE);
+    text(rep(xmax + tickLen.usr + tickGap.usr), tickPos, tickVal, adj = adj, cex = cex.axis,
+         xpd = TRUE, srt = angle);
+    tickLabelWidth = if (angle==0) max(strwidth(tickVal)) else max(strheight(tickVal)) * asp;
+  }
+  # Fill with color:
+  colors = as.matrix(colors);
+  nColumns = ncol(colors);
+  nColors = nrow(colors);
+  bl = (lmax-lmin)/nColors * (0:(nColors-1)) + lmin;
+  tl = (lmax-lmin)/nColors * (1:nColors) + lmin;
+  wi.all = tmax - tmin;
+  wi1 = wi.all/nColumns
+  if (horizontal) {
+    for (col in 1:nColumns)
+      rect(xleft = bl, xright = tl,
+         ybottom = rep(tmin + (col-1) * wi1, nColors), ytop = rep(tmin + wi1*col, nColors), 
+            col = colors[, col], border = colors[, col], xpd = TRUE);
+  } else {
+    for (col in 1:nColumns)
+       rect(xleft = rep(tmin + (col-1) * wi1, nColors), xright = rep(tmin + wi1*col, nColors),
+          ybottom = bl, ytop = tl, col = colors[, col], border = colors[, col], xpd = TRUE);
+  }
+  # frame for the legend
+  lines(c(xmin, xmax, xmax, xmin, xmin), c(ymin, ymin, ymax, ymax, ymin), xpd = TRUE );
+
+  if (nColumns > 1) for (col in 2:nColumns) 
+    if (horizontal) lines(c(xmin, xmax), c(tmin + (col-1) * wi1, tmin + (col-1) * wi1)) else 
+                    lines(c(tmin + (col-1) * wi1, tmin + (col-1) * wi1), c(ymin, ymax));
+  # Axis label
+  if (length(lab)>0 && as.character(lab) != "")
+  {
+    if (horizontal)
+    {
+      y = ymin - tickLen.usr - tickGap.usr - tickLabelWidth - labGap;
+      x = (xmin + xmax)/2;
+      adj = if (labAngle==0) c(0.5, 1) else c(1, 0.5)
+      angle = labAngle;
+      text(x, y, lab, cex = cex.lab, srt = labAngle, xpd = TRUE, adj = adj);
+    } else {
+      y = (ymin + ymax)/2;
+      x = xmax + tickLen.usr + tickGap.usr + tickLabelWidth + labGap;
+      adj = if (labAngle==0) c(0.5, 1) else c(0, 0.5);
+      angle = labAngle+90;
+      text(x, y, lab, cex = cex.lab, srt = labAngle+90, xpd = TRUE, adj = adj);
+    }
+    height = strheight(lab);
+    if (!horizontal) height = height * asp;
+    labelInfo = list(x = x, y = y, angle = angle, adj = adj,
+                     space.usr = height, gap.usr = labGap);
+  } else labelInfo = list(space.usr = 0, gap.usr = 0);
+  #### FIXME: also include a component named box that gives the outer coordinates of the area used by the legend, to the
+  ###best approximation. Maybe include the padding around the color bar.
+  invisible(list(bar = list(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, 
+                            space.usr = tmax - tmin),
+       ticks = list(length.usr = tickLen.usr, gap.usr = tickGap.usr, labelSpace.usr = tickLabelWidth),
+       label = labelInfo));
+}
+
+
+
+.boxDimensionsForHeatmapWithLegend = function(
+                     data,
+                     plotLegend = TRUE,
+                     keepLegendSpace = plotLegend,
+                     cex.legend = 1,
+                     legendShrink = 0.94,
+                     ## The following arguments are now in inches
+                     legendSpace = 0.5,
+                     legendWidth = 0.13,
+                     legendGap = 0.09, 
+                     startTempPlot = TRUE,
+                     plotDevice = "pdf",
+                     plotDeviceOptions = list(),
+                     width = 7, height = 7,...)
+{
+  data = as.matrix(data); nCols = ncol(data); nRows = nrow(data);
+
+  if (startTempPlot)
+  {
+    if (!is.null(plotDevice))
+    {
+      if (plotDevice == "x11") 
+      {
+        do.call(match.fun(plotDevice), c(list(width = width, height = height), plotDeviceOptions));
+        on.exit(dev.off());
+      } else {
+        file = tempfile();
+        do.call(match.fun(plotDevice), c(list(file = file, width = width, height = height), plotDeviceOptions))
+        on.exit({ dev.off(); unlink(file)});
+      }
+      par(mar = par("mar"));
+    }
+    barplot(1, col = "white", border = "white", axisnames = FALSE,
+                  axes = FALSE, ...);
+  }
+  pin = par("pin");
+  box = par("usr");
+  xminAll = box[1];
+  xmaxAll = box[2];
+  yminAll = box[3];
+  ymaxAll = box[4];
+
+  legendSpace.usr = legendSpace/pin[1] * (xmaxAll-xminAll);
+  legendWidth.usr = legendWidth/pin[1] * (xmaxAll-xminAll);
+  legendGap.usr = legendGap/pin[1] * (xmaxAll-xminAll);
+
+  if (!keepLegendSpace && !plotLegend)
+  {
+     legendSpace.usr = 0;
+     legendWidth.usr = 0;
+     legendGap.usr = 0;
+  }
+
+  ymin = yminAll;
+  ymax = ymaxAll;
+  xmin = xminAll;
+  xmax = xmaxAll - legendSpace.usr;
+  if (xmax < xmin) stop("'legendSpace is too large, not enough space for the heatmap.");
+  xStep = (xmax - xmin)/nCols;
+  xLeft = xmin + c(0:(nCols-1)) * xStep;
+  xRight = xLeft + xStep;
+  xMid = (xLeft + xRight)/2;
+
+  yStep = (ymax - ymin)/nRows; yBot  = ymin + c(0:(nRows-1)) * yStep;
+  yTop  = yBot + yStep; yMid = c(yTop+ yBot)/2;
+
+  list(xMin = xmin, xMax = xmax, yMin = ymin, yMax = ymax,
+       xLeft = xLeft, xRight = xMid, xMid = xMid,
+       yTop = yTop, yMid = yMid, yBottom = yBot);
 }
