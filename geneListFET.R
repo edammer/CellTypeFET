@@ -13,14 +13,24 @@
 # +9/29/25 - Changed error handler to avoid precheck for smaller background (total gene list of inputs or modules) compared to the largest reference list (explicit 2x2 table fisher.text errors shown)
 #          - Added labeledHeatmap automatic white text for significant heatmap cells, so text on top of dark colors is readable; helper functions of WGCNA labeledHeatmap now included here
 #          - Relative file paths for arguments now ok; illegal characters do not propagate to output file names
+# +12/2/25 - Added arguments strictSymmetry, asterisksOnly, maxPcolor, bkgrFileForCategories; deprecated verticalCompression argument
+#          - Text and margins (inches) auto-size to fit longest string labels on x and y using helper function at end
+#          - PDF closes even on error to avoid multiple lingering open files unable to be viewed after failed function call
+#          - maxPcolor pads heatmap scale with white for all values above that p (or FDR) value
+#          - bkgrFileForCategories allows a single-column, no-header file input for completion of the gene "universe" or background in case a categoriesFile was specified that does not consider background genes/proteins
+#          - strictSymmetry=TRUE dereplicates the background AND all duplicates across different category (column) gene lists. If all reference (row) list genes are within the column lists+background, the statistics
+#            of Fisher's exact test should be identical/symmetrical even if row (reference) and column (category) lists are swapped.
+#          - Note that only column (module or category) lists plus bkgrFileForCategories genes ever count towards background -- reference list genes not hitting any category/module (column) list do not.
+#          - asterisksOnly=TRUE prints *, **, and *** for p (or FDR) <0.05, <0.01, <0.005, but without the explicit printing of p or FDR values in any heatmap cell.
+#          - added support for viridisLite palettes: "plasma", "inferno", "magma", "rocket", "cividis", "mako", "turbo" (yellow to cool colors only), and "viridis"; must have viridisLite package installed.
 #-------------------------------------------------------------------------#
 # revisited to define fly cell types in Seurat 87 lists 2/10/2019
 # Analysis for Laura Volpicelli, mouse a-Syn Bilaterally Injected Brain Regions 2/15/2019
 # LFQ-MEGA Cell Type analysis performed with this code, with grey proteins added back in to totProteome, allGenes  4/5/2019 #***## (2 lines)
 #=========================================================================#
-geneListFET <- function(modulesInMemory=TRUE,categoriesFile=NA,categorySpeciesCode=NA,resortListsDecreasingSize=FALSE,barOption=FALSE,adjustFETforLookupEfficiency=FALSE,allowDuplicates=TRUE,
-                        refDataFiles=NA,speciesCode=NA,refDataDescription="RefList(s)_not_described",FileBaseName="geneListFET_to_RefList(s)",paletteColors="YlGnBu",
-                        heatmapTitle="Heatmap Title (not specified)", heatmapScale="minusLogFDR", verticalCompression=3, rootdir="./", reproduceHistoricCalc=FALSE, env=.GlobalEnv) {
+geneListFET <- function(modulesInMemory=TRUE,categoriesFile=NA,categorySpeciesCode=NA,resortListsDecreasingSize=FALSE,barOption=FALSE,adjustFETforLookupEfficiency=FALSE,allowDuplicates=TRUE,strictSymmetry=FALSE,
+                        refDataFiles=NA,speciesCode=NA,refDataDescription="Ref_list(s)-rows-not_described",FileBaseName="FET_to_RefList(s)",paletteColors="YlGnBu", asterisksOnly=TRUE,  #colDataDescription="CategOrModules-cols-not_described",
+                        heatmapTitle="Enrichment Heatmap (title not specified)", heatmapScale="minusLogFDR", maxPcolor=0.25, verticalCompression=1, bkgrFileForCategories=NA, rootdir="./", reproduceHistoricCalc=FALSE, env=.GlobalEnv) {
 
 require(WGCNA,quietly=TRUE)
 require(RColorBrewer,quietly=TRUE)
@@ -60,6 +70,14 @@ if(!modulesInMemory) {  # Read in Categories as list
 	#  }
 	#}
 
+	if(!is.na(bkgrFileForCategories)) {
+	  if(file.exists(bkgrFileForCategories)) {
+	    bkgr.1list<-as.list(read.csv(paste0(refDataDir,bkgrFileForCategories), stringsAsFactors=FALSE,header=F,check.names=FALSE))
+	    bkgr.vec<-lapply(bkgr.1list,function(x) x[!x==''] )
+	    greyToAddToTotProteome<- as.vector( data.frame(do.call("rbind", strsplit(bkgr.vec[[1]], "[|]")))[,1] )  # [[1]] only operate on first column
+	  } else { stop("Specified file ",bkgrFileForCategories," specified in optional argument bkgrFileForCategories not found.\nThis should be a single column file with no header, containing all UniqueIDs or symbols expected in any category (heatmap column).") }
+	}
+
 } else {  # use WGCNA modules in memory
 
   # Module lookup table
@@ -85,8 +103,65 @@ if(!modulesInMemory) {  # Read in Categories as list
 moduleList=enumeratedLists
 
 
-refDataDescription.forFilename<-gsub('\\/','.',gsub('\\\\', ".", gsub('\\.\\.','',refDataDescription)))  #avoids invalid PDF filename below with relative path specification
-pdf(file=paste0(outputfigs,"/",FileBaseName,".Overlap.in.",refDataDescription.forFilename,".pdf"),height=15,width=24) 
+# ---- build x-axis labels exactly as in your heatmap
+if (modulesInMemory) {
+  categoryColorSymbols <- paste0("ME", names(moduleList))
+  xSymbolsText <- paste0(
+    names(moduleList), " ",
+    orderedModules[match(names(moduleList), orderedModules[,2]), 1]
+  )
+} else {
+  categoryColorSymbols <- names(moduleList)
+  xSymbolsText <- names(moduleList)
+}
+
+# choose cex dynamically (reuse your earlier scale_cex or set fixed if you prefer)
+scale_cex <- function(chars, n, base = 1.6, per_char = 0.015, per_n = 0.003, mn = 0.6, mx = 1.8) {
+  out <- base - per_char * chars - per_n * n
+  max(mn, min(mx, out))
+}
+cexX_global <- scale_cex(max(nchar(xSymbolsText)), length(xSymbolsText))
+# for Y we will compute per page, but we also need a worst-case device size:
+get_header_names <- function(fp) {
+  df <- try(read.csv(fp, stringsAsFactors = FALSE, header = TRUE, check.names = FALSE, nrows = 1), silent = TRUE)
+  if (inherits(df, "try-error") || is.null(df)) character(0) else colnames(df)
+}
+all_y_labels <- unique(unlist(lapply(refDataFiles, function(rdf) get_header_names(paste0(refDataDir, rdf)))))
+
+# worst-case counts across pages
+max_rows_overall <- max(1L, length(all_y_labels))
+nCols_overall    <- length(xSymbolsText)
+
+# pick a conservative cexY for worst-case sizing
+cexY_global <- scale_cex(max(nchar(all_y_labels)), max_rows_overall, base = 1.4)
+
+# compute once: device size that fits the worst page, including margins
+sz_overall <- compute_pdf_and_margins(
+  xLabs = xSymbolsText,
+  yLabs = if (length(all_y_labels)) all_y_labels else "X",
+  nCols = nCols_overall,
+  nRows = max_rows_overall,
+  cexX  = cexX_global,
+  cexY  = cexY_global,
+  xAngle = 90,
+  asterisksOnly = asterisksOnly
+)
+
+
+# open the PDF big enough for all pages
+refDataDescription.forFilename <- gsub('\\/','.', gsub('\\\\', ".", gsub('\\.\\.','', refDataDescription)))
+pdf_path <- paste0(outputfigs,"/",FileBaseName,".Overlap.in.",refDataDescription.forFilename,".pdf")
+
+grDevices::pdf(file = pdf_path, width = sz_overall$width, height = sz_overall$height, onefile = TRUE)
+pdf_dev <- grDevices::dev.cur()
+
+# Ensure the PDF device is closed even if an error happens later
+on.exit({
+  dl <- grDevices::dev.list()
+  if (!is.null(dl) && pdf_dev %in% dl) {
+    try(grDevices::dev.off(pdf_dev), silent = TRUE)
+  }
+}, add = TRUE)
 ############
 
 #***iterating through multiple files (each one a page of output PDF):  
@@ -119,9 +194,9 @@ for (refDataFile in refDataFiles) {
 	    #remove duplicates from any marker list
 	    refData<-lapply(refData,function(x) { remIndices=as.vector(na.omit(match(duplicatedvec,x))); if (length(remIndices)>0) { x[-remIndices] } else { x }; } )
 	  }
-	  duplicateHandling="DuplicatesREMOVED"
+	  duplicateHandling="DupsInRow.REMOVED"
 	} else {
-	  duplicateHandling="DuplicatesALLOWED"
+	  duplicateHandling="DupsInRow.ALLOWED"
 	}
 	length(unlist(refData))
 	unlist(refData)[which(duplicated(unlist(refData)))]
@@ -204,9 +279,19 @@ for (refDataFile in refDataFiles) {
 	
 	
 	if(modulesInMemory) {
-	  allGenes<- c(unlist(moduleList),greyToAddToTotProteome)  #unique() here decreases significance, totProteomeLength; Not in original code.
+	  allGenes<- c(unlist(moduleList),greyToAddToTotProteome)  # unique() here decreases significance, totProteomeLength; Not in original code.
+	  if (strictSymmetry) allGenes <- unique(allGenes)         # strictSymmetry enforced:  duplicates across all modules (columns) are removed.
 	} else {
-	  allGenes<- unlist(enumeratedLists)  #ANOVAout$Symbol  #here the background is all measured proteins, #categoriesData$BiomartMouseSymbol
+	  if(!is.na(bkgrFileForCategories)) {
+	    allGenes <- unlist(enumeratedLists)
+	    if (strictSymmetry) allGenes <- unique(allGenes)       # strictSymmetry enforced: duplicates across all categories (columns) removed.
+	    greyToAddToTotProteome <- greyToAddToTotProteome[which(!greyToAddToTotProteome %in% allGenes)]  # only add background if not already in categories. 
+	    if (strictSymmetry) greyToAddToTotProteome <- unique(greyToAddToTotProteome)
+	    allGenes <- c(allGenes, greyToAddToTotProteome)
+	  } else {  # no additional background (grey-like) gene list provided
+	    allGenes<- unlist(enumeratedLists)  #                  # here the background is all measured (category/column list) proteins
+	    if (strictSymmetry) allGenes <- unique(allGenes)       # strictSymmetry enforced: duplicates across all categories (columns) removed.
+	  }
 	}
 	allGenesNetwork <- as.matrix(allGenes,stringsAsFactors = FALSE) 
 	
@@ -416,7 +501,7 @@ for (refDataFile in refDataFiles) {
 	  NegLogCorr<-matrix(NegLogCorr,byrow=TRUE,nrow=1)
 	  NegLogUncorr<-matrix(NegLogUncorr,byrow=TRUE,nrow=1)
 	}
-	if(mean(rowMeans(adjustedPval,na.rm=T),na.rm=T)==1) { this.heatmapScale<-"p.unadj"; addText="-No FDR values lower than 100%"; } else { this.heatmapScale<-heatmapScale; addText=""; }
+	if(mean(rowMeans(adjustedPval,na.rm=T),na.rm=T)==1) { this.heatmapScale<-"p.unadj"; addText="-fallback b/c no FDR values lower than 100%"; } else { this.heatmapScale<-heatmapScale; addText=""; }
 	
 	## Use the text function with the FDR filter in labeledHeatmap to add asterisks, e.g. * 
 	 txtMat <- adjustedPval
@@ -426,10 +511,10 @@ for (refDataFile in refDataFiles) {
 	  txtMat[adjustedPval <0.005] <- "***"
 	
 	  txtMat1 <- signif(adjustedPval,2)
-	  txtMat1[adjustedPval>0.25] <- ""
+	  txtMat1[adjustedPval>maxPcolor] <- ""
 	
 	  
-	  textMatrix1 = paste( txtMat1, txtMat , sep = ' ');
+	  if (!asterisksOnly) { textMatrix1 = paste( txtMat1, txtMat , sep = ' ') } else { textMatrix1 = txtMat }
 	  textMatrix1= matrix(textMatrix1,ncol=ncol(adjustedPval),nrow=nrow(adjustedPval))
 	
 	  #for textMatrix of p.unadj
@@ -440,17 +525,14 @@ for (refDataFile in refDataFiles) {
 	  txtMat[FTpVal <0.005] <- "***"
 	
 	  txtMat.p.unadj <- signif(FTpVal,2)
-	  txtMat.p.unadj[FTpVal>0.25] <- ""
+	  txtMat.p.unadj[FTpVal>maxPcolor] <- ""
 	
-	  textMatrix.p.unadj = paste( txtMat.p.unadj, txtMat , sep = ' ');
+	  if (!asterisksOnly) { textMatrix.p.unadj = paste( txtMat.p.unadj, txtMat , sep = ' ') } else { textMatrix.p.unadj = txtMat }
 	  textMatrix.p.unadj= matrix(textMatrix.p.unadj,ncol=ncol(FTpVal),nrow=nrow(FTpVal))
 	
 	
 	## Plotting
 	if(!barOption) {
-		par(mfrow=c(verticalCompression,1))
-		par( mar = c(15, 16, 9, 2) ) #bottom, left, top, right #text lines
-		
 		if(exists("colvec")) suppressWarnings(rm(colvec))
 		
 		#RColorBrewer::display.brewer.all()
@@ -460,14 +542,31 @@ for (refDataFile in refDataFiles) {
 		}
 		if(!paletteColors[iter] %in% c("YlOrRd","YlOrBr","YlGnBu","YlGn","Reds","RdPu","Purples","PuRd","PuBuGn","PuBu","OrRd","Oranges","Greys","Greens","GnBu","BuPu","BnGn","Blues",
 		                           "Spectral","RdYlGn","RdYlBu","RdGy","RdBu","PuOr","PRGn","PiYG","BrBG")) {
-		   cat(paste0("  - paletteColors specified as '",paletteColors[iter],"' is not in RColorBrewer::display.brewer.all() groups 1 or 3.\n    Using palette 'YlGnBu' (yellow, green, blue)...\n"))
-		   paletteColors[iter]="YlGnBu"
+		   if(!paletteColors[iter] %in% c("plasma","inferno","magma","rocket","cividis","mako","turbo","viridis")) {
+		     cat(paste0("  - paletteColors specified as '",paletteColors[iter],"' is not in RColorBrewer::display.brewer.all() groups 1 or 3; nor is it provided by viridisLite package.\n    Using palette 'YlGnBu' (yellow, green, blue)...\n"))
+		     paletteColors[iter]="YlGnBu"
+		   } else {
+		     require(viridisLite,quietly=TRUE)
+		   }
 		}
 		if(paletteColors[iter] %in% c("YlOrRd","YlOrBr","YlGnBu","YlGn","Reds","RdPu","Purples","PuRd","PuBuGn","PuBu","OrRd","Oranges","Greys","Greens","GnBu","BuPu","BnGn","Blues")) {
 		   paletteLength=9
 		   outOfParkColor=brewer.pal(paletteLength,paletteColors[iter])[paletteLength]
 		   colvec<- brewer.pal(paletteLength,paletteColors[iter])[1:6]
 		} else {
+		   if(paletteColors[iter] %in% c("plasma","inferno","magma","rocket","cividis","mako","turbo","viridis")) {  # viridisLite palettes
+		     if(paletteColors[iter]=="turbo") {
+		       paletteLength=50
+		       fullPalette=rev(do.call(paletteColors[iter], as.list(paletteLength)))
+		       outOfParkColor=fullPalette[paletteLength]
+		       colvec<- c("#FFFF37FF", fullPalette[c(22,24,26,28,30,32,34,36,38,40,42,44)]) #45-49 skipped for outOfPark effect; starts with yellow
+		     } else {  # not turbo (2-sided intense ends of palette)
+		       paletteLength=15
+		       fullPalette=rev(do.call(paletteColors[iter], as.list(paletteLength)))
+		       outOfParkColor=fullPalette[paletteLength]
+		       colvec<- fullPalette[1:(paletteLength-4)]
+		     }
+		   } else {  # display.bewer.all() group 3; take half of the shifting gradient
 		   paletteLength=11
 		   # pure purple for outOfPark maximum scale color, deprecated.
 		   # if(paletteColors[iter] %in% c("Spectral","RdYlGn","RdYlBu","RdGy","RdBu","PuOr","BrBG")) { outOfParkColor="#A020F0" } else { outOfParkColor="darkviolet" }
@@ -477,6 +576,7 @@ for (refDataFile in refDataFiles) {
 #		   } else {
 #		      colvec<- brewer.pal(paletteLength,paletteColors[iter])[6:11]  #no rev if we want to take the right half of the palette color swatches
 #		   }
+		   }
 		}
 		   
 		colvecRamped1<- vector()
@@ -489,15 +589,86 @@ for (refDataFile in refDataFiles) {
 		temp2<-colorRampPalette(c(colvecRamped1[length(colvecRamped1)], outOfParkColor)) ## grade to outOfParkColor at top of scale
 		colvecRamped1<-c(colvecRamped1, temp2(gradations))
 		
-		colvecRamped1<-c("#FFFFFF",colvecRamped1)  ## grade to white at bottom of scale
-		
+		if (maxPcolor==1) {
+		  colvecRamped1<-c("#FFFFFF",colvecRamped1)  ## grade to white at top of -logFDR scale (no significance)
+		} else {
+		  if(this.heatmapScale=="minusLogFDR") {
+		    whiteProp <- -log10(maxPcolor) / max(NegLogCorr[is.finite(NegLogCorr)], na.rm=TRUE)
+		    nColors=length(colvecRamped1)
+		    nWhite<-ceiling( (whiteProp / (1 - whiteProp)) * nColors )  # final padding value count to meet p>maxPcolor all being "white"
+                    # avoid any color if max(NetLogCorr) < -log(maxPcolor) (whiteProp is negative in this case)
+		    if (max(NegLogCorr, na.rm=T) < -log10(maxPcolor)) {
+		      colvecRamped1 <- c(rep("white", length(colvecRamped1)+1), colvecRamped1)  # 1/2 +1 white increments
+		      allWhite=TRUE  # a dummy value of 2x the max -log10(maxPcolor) will be the max color intensity on the scale, no color will be plotted in the heatmap
+		      legend_zlim <- c(0, 2 * -log10(maxPcolor))  # extend legend up to ~2× threshold
+                    } else {
+		      colvecRamped1 <- c(rep("white", nWhite), colvecRamped1)
+		      allWhite=FALSE
+		      legend_zlim <- c(0, max(NegLogCorr, na.rm = TRUE))
+		    }
+
+		  } else {
+		    if(max(FTpVal, na.rm=T)<maxPcolor) {
+		      colvecRamped1 <- colvecRamped1  # don't add white -- everything is lt maxPcolor
+		      allWhite=FALSE
+		      legend_zlim <- c(min(FTpVal, na.rm = TRUE), max(FTpVal, na.rm = TRUE))
+		    } else {
+		      whiteProp <- (max(FTpVal, na.rm=T) -maxPcolor) / (max(FTpVal, na.rm=T) - min(FTpVal, na.rm=T))  # different proportion calculation for p value range
+		      nColors=length(colvecRamped1)
+		      nWhite<-ceiling( (whiteProp / (1 - whiteProp)) * nColors ) #final padding value count to meet p>maxPcolor all being "white"
+                      # avoid any color if min(FTpVal) > maxPcolor (whiteProp is negative in this case)
+		      if (min(FTpVal, na.rm=T) > maxPcolor) {
+		        colvecRamped1 <- c(rep("white", length(colvecRamped1)+1), colvecRamped1)  # 1/2 +1 white increments
+		        allWhite=TRUE  # a dummy value of 1/2x the maxPcolor will be the max color intensity on the scale, no color will be plotted in the heatmap
+		        legend_zlim <- c(0, 1)
+		      } else {
+		        colvecRamped1 <- c(rep("white", nWhite), colvecRamped1)
+		        allWhite=FALSE
+		        legend_zlim <- c(min(FTpVal, na.rm = TRUE), 1)
+		      }
+		    }
+		  }
+		}
 		
 		if (modulesInMemory) { categoryColorSymbols=paste0("ME",names(moduleList)) } else { if(!length(na.omit(match(orderedLabelsByRelatedness[,2],rownames(NegLogUncorr))))==nrow(orderedLabelsByRelatedness)) { categoryColorSymbols=dummyColors } else { categoryColorSymbols=names(moduleList) } }
 		xSymbolsText= ifelse ( rep(modulesInMemory,length(names(moduleList))), paste0(names(moduleList)," ",orderedModules[match(names(moduleList),orderedModules[,2]),1]), names(moduleList) )
+
+
+		# --- per-page margins in inches (x uses same labels; y = names(categories) this page)
+		cexY_page <- scale_cex(max(nchar(names(categories))), length(names(categories)), base = 1.4)
+
+		sz_page <- compute_pdf_and_margins(
+		  xLabs = xSymbolsText,
+		  yLabs = names(categories),
+		  nCols = length(xSymbolsText),
+		  nRows = length(names(categories)),
+		  cexX  = cexX_global,
+		  cexY  = cexY_page,
+		  xAngle = 90
+		)
+
+		# Set margins in inches to prevent 'figure margins too large'
+		par(mfrow = c(verticalCompression, 1))
+		par(mai = sz_page$mai)    # <-- replaces previous par(mar = ...)
+
+
+		# --- *X* dynamic cex for axis labels ---
+		nX <- length(xSymbolsText)
+		nY <- length(names(categories))
+		maxY <- if (nY) max(nchar(names(categories)), na.rm = TRUE) else 0
+		maxX <- if (nX) max(nchar(xSymbolsText),      na.rm = TRUE) else 0
+
+		scale_cex <- function(chars, n, base = 1.6, per_char = 0.015, per_n = 0.003, mn = 0.6, mx = 1.8) {
+		  out <- base - per_char * chars - per_n * n
+		  max(mn, min(mx, out))
+		}
+		cexX <- scale_cex(maxX, nX, base = 1.5)     # for x labels (bottom)
+		cexY <- scale_cex(maxY, nY, base = 1.4)  # for y labels (left)
+
 		if (this.heatmapScale=="p.unadj") {
 
 		# Convert matrix values to colors
-		bgColors <- WGCNA::numbers2colors(FTpVal, colors = colvecRamped1,
+		bgColors <- WGCNA::numbers2colors(FTpVal, colors = rev(colvecRamped1),
 		                                  signed = FALSE, lim = c(0, max(FTpVal, na.rm=TRUE)))
 
 		# Convert hex colors to perceived brightness
@@ -520,12 +691,13 @@ for (refDataFile in refDataFiles) {
 		               xSymbols = xSymbolsText,
 		               xColorLabels=FALSE,
 		               colors = rev(colvecRamped1),
+		               allWhite = allWhite,
 		               textMatrix =  textMatrix.p.unadj,
 		               txtMatCols = textColors,
 		               setStdMargins = FALSE,
-		               cex.text = 0.6,
-		               cex.lab.x = 1.2,  # new
-		               cex.lab.y = 1.2,  # 0.7
+		               cex.text = if(asterisksOnly) { 0.6 } else { 0.43 },
+		               cex.lab.x = cexX,     # *X* adjust dynamically to accomodate maximum xLabels string length *X*
+		               cex.lab.y = cexY,     # *X* adjust dynamically to accomodate text height within the available height for each labeledHeatmap row, given pdf height *X*
 		               verticalSeparator.x=c(rep(c(1:length(names(moduleList))),nrow(orderedLabelsByRelatedness))),
 		               verticalSeparator.col = 1,
 		               verticalSeparator.lty = 1,
@@ -536,12 +708,19 @@ for (refDataFile in refDataFiles) {
 		               horizontalSeparator.lty = 1,
 		               horizontalSeparator.lwd = 1,
 		               horizontalSeparator.ext = 0,
-		               zlim = c(min(FTpVal),1),
-		               main = paste0("Enrichment of ",this.heatmapTitle,"\nof ",refDataFile," Marker Lists by Gene Symbol (",duplicateHandling,")\nHeatmap: Fisher Exact p value, Uncorrected\n (p-values shown",addText,")\n"),
-		               cex.main=1.75)  # 0.8
+		               zlim = legend_zlim,  # c(min(FTpVal, na.rm = TRUE), 1),
+		               main = paste0("Enrichment of ",this.heatmapTitle,"\n",
+		                      "Row marker list(s) file: ",refDataFile," - Gene Symbol Enr. (",duplicateHandling,")\n",
+		                      if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr for columns (categories): ", bkgrFileForCategories) }, if(strictSymmetry) { " | Redundancy ACROSS column lists REMOVED\n" } else { "\n" },
+		                      "Heatmap: Fisher Exact p value, Uncorrected\n",
+		                      "(p-values colored ", if(!asterisksOnly) { "and shown " },"when below ",maxPcolor,addText,")\n"),
+		               cex.main=1.3,  # 0.8; more recently 1.75
+		               this.heatmapScale = this.heatmapScale)  # for legend title specificity
 		}
 		
 		if (this.heatmapScale=="minusLogFDR") {
+		#*** added to handle inf values
+		NegLogCorr[which(!is.na(NegLogCorr) & !is.finite(NegLogCorr))]<- -log10(1e-323)   #minimum double-precision number // vs. <- max(NegLogCorr[is.finite(NegLogCorr)], na.rm=TRUE)
 
 		# Convert matrix values to colors
 		bgColors <- WGCNA::numbers2colors(NegLogCorr, colors = colvecRamped1,
@@ -567,12 +746,13 @@ for (refDataFile in refDataFiles) {
 		               xSymbols = xSymbolsText,
 		               xColorLabels=FALSE,
 		               colors = colvecRamped1,
+		               allWhite = allWhite,
 		               textMatrix = textMatrix1, #signif(adjustedPval, 2),
 		               txtMatCols = textColors,  #white/black overlay, depending on brightness (argument supported in custom function implemented here, from WGCNA source on 9/29/2025)
 		               setStdMargins = FALSE,
-		               cex.text = 0.6,
-		               cex.lab.x = 1.5,  # new
-		               cex.lab.y = 1.5,  # 0.7
+		               cex.text = if(asterisksOnly) { 0.6 } else { 0.43 },
+		               cex.lab.x = cexX,  # *X* adjust dynamically to accomodate maximum xLabels string length *X*
+		               cex.lab.y = cexY,   # *X* adjust dynamically to accomodate text height within the available height for each labeledHeatmap row, given pdf height *X*
 		               verticalSeparator.x=c(rep(c(1:length(names(moduleList))),nrow(orderedLabelsByRelatedness))),
 		               verticalSeparator.col = 1,
 		               verticalSeparator.lty = 1,
@@ -583,12 +763,17 @@ for (refDataFile in refDataFiles) {
 		               horizontalSeparator.lty = 1,
 		               horizontalSeparator.lwd = 1,
 		               horizontalSeparator.ext = 0,
-		               zlim = c(0,max(NegLogCorr,na.rm=TRUE)),
-		               main = paste0("Enrichment of ",this.heatmapTitle,"\nof ",refDataFile," Marker Lists by Gene Symbol (",duplicateHandling,")\nHeatmap: -log(p), BH Corrected\n (Corrected p-values, FDR, shown)"), #*** Uncorrected\n (p-values shown)"),
-		               cex.main=1.75)  # 0.8
+		               zlim = legend_zlim,  # c(0,max(NegLogCorr,na.rm=TRUE)),
+		               main = paste0("Enrichment of ",this.heatmapTitle,"\n",
+		                      "Row marker list(s) file: ",refDataFile," - Gene Symbol Enr. (",duplicateHandling,")\n",
+		                      if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr for columns (categories): ", bkgrFileForCategories) }, if(strictSymmetry) { " | Redundancy ACROSS column lists REMOVED\n" } else { "\n" },
+		                      "Heatmap: -log(p), BH Corrected\n",
+		                      "(Corrected p-values, FDR, colored ",if(!asterisksOnly) { "and shown " }, "when below ",maxPcolor,")"), #*** Uncorrected\n (p-values shown)"),
+		               cex.main=1.3,  # 0.8; more recently 1.75
+		               this.heatmapScale = this.heatmapScale)  # for legend title specificity
 		}
 	} else {  #if barOption==TRUE:  PLOT BAR PLOTS FOR EACH REFERENCE LIST
-		par(mfrow=c(verticalCompression,2))
+		par(mfrow=c(verticalCompression,1))
 		par(mar=c(15,7,4.5,1))
 	
 		moduleColors= if (modulesInMemory) { names(moduleList) } else { "bisque4" }  # if (modulesInMemory), expect colors for names(moduleList)
@@ -597,6 +782,8 @@ for (refDataFile in refDataFiles) {
 		
 			for( i in 1:nrow(NegLogUncorr)) {
 				plotting <- NegLogUncorr[i,]
+				#*** added to handle inf values
+				plotting[which(!is.na(plotting) & !is.finite(plotting))]<- -log10(1e-323)   #minimum double-precision number // vs. <- max(plotting[is.finite(plotting)], na.rm=TRUE)
 				cellType <- rownames(NegLogUncorr)[i]
 				barplot(plotting,main = cellType, ylab="",cex.names=1.1, width=1.5,las=2,cex.main=2, legend.text=F,col=moduleColors,names.arg=xSymbolsText)
 				mtext(side=2, line=3, "-log(pValue)\n(Uncorrected)", col="black", font=1, cex=1.5)
@@ -607,6 +794,8 @@ for (refDataFile in refDataFiles) {
 		if (this.heatmapScale=="minusLogFDR") {
 			for( i in 1:nrow(NegLogCorr)) {
 				plotting <- NegLogCorr[i,]
+				#*** added to handle inf values
+				plotting[which(!is.na(plotting) & !is.finite(plotting))]<- -log10(1e-323)   #minimum double-precision number // vs. <- max(plotting[is.finite(plotting)], na.rm=TRUE)
 				cellType <- rownames(NegLogCorr)[i]
 				barplot(plotting,main = cellType, ylab="",cex.names=1.1, width=1.5,las=2,cex.main=2, legend.text=F,col=moduleColors,names.arg=xSymbolsText)
 				mtext(side=2, line=3, "-log(FDR)\n(Benjamini-Hochberg Correction)", col="black", font=1, cex=1.5)
@@ -619,7 +808,9 @@ for (refDataFile in refDataFiles) {
 	
 	#+#+#+#+#+#+#+#+#+#+#+#+#+
 } #end for(refDataFile ...
-dev.off()
+# Optional explicit PDF close (safe if on.exit already fired)
+dl <- grDevices::dev.list()
+if (!is.null(dl) && pdf_dev %in% dl) grDevices::dev.off(pdf_dev)
 }
 
 
@@ -631,7 +822,7 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
     yLabelsPosition = "left", xColorWidth = 2 * strheight("M"), 
     yColorWidth = 2 * strwidth("M"), xColorOffset = strheight("M")/3, 
     yColorOffset = strwidth("M")/3, colorMatrix = NULL, 
-    colors = NULL, naColor = "grey", textMatrix = NULL, 
+    colors = NULL, allWhite=FALSE, naColor = "grey", textMatrix = NULL, 
     cex.text = NULL, textAdj = c(0.5, 0.5), cex.lab = NULL, cex.lab.x = cex.lab, 
     cex.lab.y = cex.lab, colors.lab.x = 1, colors.lab.y = 1, 
     font.lab.x = 1, font.lab.y = 1, bg.lab.x = NULL, bg.lab.y = NULL, 
@@ -641,7 +832,7 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
     horizontalSeparator.y = NULL, horizontalSeparator.col = 1, 
     horizontalSeparator.lty = 1, horizontalSeparator.lwd = 1, 
     horizontalSeparator.ext = 0, horizontalSeparator.interval = 0, 
-    showRows = NULL, showCols = NULL, txtMatCols = "black", cex.main=1.5, ...) 
+    showRows = NULL, showCols = NULL, txtMatCols = "black", cex.main=1.5, this.heatmapScale = NA,...) 
 {
     textFnc = match.fun("text")
     if (!is.null(colorLabels)) {
@@ -718,7 +909,10 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
     labPos = .heatmapWithLegend(Matrix[showRows, showCols, drop = FALSE], 
         signed = FALSE, colorMatrix = colorMatrix, colors = colors, 
         naColor = naColor, cex.legendLabel = cex.main, plotLegend = plotLegend, 
-        keepLegendSpace = keepLegendSpace, ...)
+        keepLegendSpace = keepLegendSpace,
+        legendLabel = if (this.heatmapScale=="minusLogFDR") { as.expression(bquote(-log[10]~FDR)) } else { "P Value" },
+        legendSpan = if(dim(Matrix)[1]<4) { "plot+bottom" } else { "plot" }, 
+        legendAlign = if(dim(Matrix)[1]<4) { "span" } else { "heatmapCenter" }, ...)
     plotbox = labPos$box
     xmin = plotbox[1]
     xmax = plotbox[2]
@@ -1028,7 +1222,10 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
                      legendLengthGap = 0.15,
                      frame = TRUE,
                      frameTicks = FALSE, tickLen = 0.09,
-                     tickLabelAngle = 0,
+                     tickLabelAngle = -90,  #previously oriented vertically: 0
+                     legendSpan = c("plot","figure","plot+bottom","plot+top"),
+                     legendAlign = c("heatmapCenter","span"), # can now center legend on heatmap rows (used with <4 rows in heatmap)
+                     allWhite=FALSE,
                      ...)
 {
  
@@ -1079,12 +1276,15 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
   yTop  = yBot + yStep; yMid = c(yTop+ yBot)/2;
 
   
-  if (is.null(colorMatrix))
-    colorMatrix = numbers2colors(data, signed, colors = colors, lim = zlim, naColor = naColor)
-  dim(colorMatrix) = dim(data);
-  if (reverseRows)
-    colorMatrix = .reverseRows(colorMatrix);
-  for (c in 1:nCols)
+  if (isTRUE(allWhite)) {
+    colorMatrix <- matrix("white", nrow = nRows, ncol = nCols)
+  } else {
+    if (is.null(colorMatrix)) colorMatrix = numbers2colors(data, signed, colors = colors, lim = zlim, naColor = naColor)
+    dim(colorMatrix) = dim(data);
+    if (reverseRows) colorMatrix = .reverseRows(colorMatrix);
+  }
+
+  for (c in 1:nCols)  # draw heatmap cells
   {
     rect(xleft = rep(xLeft[c], nRows), xright = rep(xRight[c], nRows),
          ybottom = yBot, ytop = yTop, col = ifelse(colorMatrix[, c]==0, 0, colorMatrix[, c]), 
@@ -1098,28 +1298,112 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
   if (plotLegend)
   {
       # Now plot the legend.
-      legendSize.usr = legendShrink * (ymaxAll - yminAll);
-      if (legendSize.usr > maxLegendSize.usr) legendSize.usr = maxLegendSize.usr
-      if (legendLengthGap.usr > 0.5*(ymaxAll - yminAll)*(1-legendShrink)) 
-          legendLengthGap.usr = 0.5*(ymaxAll - yminAll)*(1-legendShrink);
-      y0 = yminAll + legendLengthGap.usr;
-      y1 = ymaxAll - legendLengthGap.usr;
-      movementRange = (y1-y0 - legendSize.usr);
-      if (movementRange < -1e-10) {browser(".heatmapWithLegend: movementRange is negative."); movementRange = 0;}
-      ymin.leg = y0 + legendPosition * movementRange;
-      ymax.leg = y0 + legendPosition * movementRange + legendSize.usr
-      legendPosition = .plotColorLegend(xmin = xmaxAll - (legendSpace.usr - legendGap.usr),
-                       xmax = xmaxAll - (legendSpace.usr - legendGap.usr - legendWidth.usr),
-                       ymin = ymin.leg,
-                       ymax =  ymax.leg,
-                       lim = zlim,
-                       colors = colors,
-                       tickLen.usr = tickLen.usr,
-                       cex.axis = cex.legendAxis,
-                       lab = legendLabel,
-                       cex.lab = cex.legendLabel,
-                       tickLabelAngle = tickLabelAngle
-                       );
+#      legendSize.usr = legendShrink * (ymaxAll - yminAll);
+#      if (legendSize.usr > maxLegendSize.usr) legendSize.usr = maxLegendSize.usr
+#      if (legendLengthGap.usr > 0.5*(ymaxAll - yminAll)*(1-legendShrink)) 
+#          legendLengthGap.usr = 0.5*(ymaxAll - yminAll)*(1-legendShrink);
+#      y0 = yminAll + legendLengthGap.usr;
+#      y1 = ymaxAll - legendLengthGap.usr;
+#      movementRange = (y1-y0 - legendSize.usr);
+#      if (movementRange < -1e-10) {browser(".heatmapWithLegend: movementRange is negative."); movementRange = 0;}
+#      ymin.leg = y0 + legendPosition * movementRange;
+#      ymax.leg = y0 + legendPosition * movementRange + legendSize.usr
+#      legendPosition = .plotColorLegend(xmin = xmaxAll - (legendSpace.usr - legendGap.usr),
+#                       xmax = xmaxAll - (legendSpace.usr - legendGap.usr - legendWidth.usr),
+#                       ymin = ymin.leg,
+#                       ymax =  ymax.leg,
+#                       lim = zlim,
+#                       colors = colors,
+#                       tickLen.usr = tickLen.usr,
+#                       cex.axis = cex.legendAxis,
+#                       lab = legendLabel,
+#                       cex.lab = cex.legendLabel,
+#                       tickLabelAngle = tickLabelAngle
+#                       );
+
+    legendSpan <- match.arg(legendSpan)
+    legendAlign <- match.arg(legendAlign)
+
+    pin <- par("pin")                    # inner plot size [inches]
+    box <- par("usr")                    # plot region coordinates
+    xminAll <- box[1]; xmaxAll <- box[2]
+    yminAll <- box[3]; ymaxAll <- box[4]
+    yRange  <- ymaxAll - yminAll
+
+    mai <- par("mai")                    # inches
+    bottom_usr <- mai[1] / pin[2] * yRange
+    top_usr    <- mai[3] / pin[2] * yRange
+
+    # space (usr) on the right for legend band
+    legendSpace.usr <- legendSpace / pin[1] * (xmaxAll - xminAll)
+    legendWidth.usr <- legendWidth / pin[1] * (xmaxAll - xminAll)
+    legendGap.usr   <- legendGap   / pin[1] * (xmaxAll - xminAll)
+    tickLen.usr     <- tickLen     / pin[1] * (xmaxAll - xminAll)
+    maxLegendSize.usr   <- maxLegendSize    / pin[2] * yRange
+    legendLengthGap.usr <- legendLengthGap  / pin[2] * yRange
+
+    if (!keepLegendSpace && !plotLegend) {
+      legendSpace.usr <- legendWidth.usr <- legendGap.usr <- 0
+    }
+
+    # Heatmap plot box (no margins)
+    ymin <- yminAll
+    ymax <- ymaxAll
+
+    # Choose legend vertical span in usr
+    span_min <- switch(legendSpan,
+      "plot"        = ymin,
+      "figure"      = yminAll - bottom_usr,
+      "plot+bottom" = yminAll - bottom_usr,
+      "plot+top"    = yminAll
+    )
+    span_max <- switch(legendSpan,
+      "plot"        = ymax,
+      "figure"      = ymaxAll + top_usr,
+      "plot+bottom" = ymaxAll,
+      "plot+top"    = ymaxAll + top_usr
+    )
+    spanRange <- span_max - span_min
+
+    # Legend height
+    legendSize.usr <- legendShrink * spanRange
+    if (legendSize.usr > maxLegendSize.usr) legendSize.usr <- maxLegendSize.usr
+
+    # --- Vertical positioning
+    if (legendAlign == "heatmapCenter") {
+      # center on the heatmap rows (plot region), then clamp into span
+      y_center <- (ymin + ymax) / 2
+      ymin.leg <- y_center - legendSize.usr / 2
+      ymax.leg <- y_center + legendSize.usr / 2
+
+      lowBound  <- span_min + legendLengthGap.usr
+      highBound <- span_max - legendLengthGap.usr
+      if (ymin.leg < lowBound) {
+        shift <- lowBound - ymin.leg
+        ymin.leg <- ymin.leg + shift;  ymax.leg <- ymax.leg + shift
+      }
+      if (ymax.leg > highBound) {
+        shift <- ymax.leg - highBound
+        ymin.leg <- ymin.leg - shift;  ymax.leg <- highBound
+      }
+    } else {
+      # prior behavior: position within the span by legendPosition
+      y0 <- span_min + legendLengthGap.usr
+      y1 <- span_max - legendLengthGap.usr
+      movementRange <- max(0, (y1 - y0 - legendSize.usr))
+      ymin.leg <- y0 + legendPosition * movementRange
+      ymax.leg <- ymin.leg + legendSize.usr
+    }
+
+    # Draw legend (ticks horizontal because tickLabelAngle = -90 => angle 0 for vertical legend)
+    legendPosition <- .plotColorLegend(
+      xmin = xmaxAll - (legendSpace.usr - legendGap.usr),
+      xmax = xmaxAll - (legendSpace.usr - legendGap.usr - legendWidth.usr),
+      ymin = ymin.leg, ymax = ymax.leg,
+      lim = zlim, colors = colors, tickLen.usr = tickLen.usr,
+      cex.axis = cex.legendAxis, lab = legendLabel,
+      cex.lab = cex.legendLabel, tickLabelAngle = tickLabelAngle
+    )
     
   } else legendPosition = NULL
 
@@ -1418,4 +1702,96 @@ if (FALSE)
   list(xMin = xmin, xMax = xmax, yMin = ymin, yMax = ymax,
        xLeft = xLeft, xRight = xMid, xMid = xMid,
        yTop = yTop, yMid = yMid, yBottom = yBot);
+}
+
+
+# --- measure a vector of labels in inches on a temp device
+.measure_text_inches <- function(labels, angle = 0, cex = 1, fam = "", which = c("width","height")) {
+  which <- match.arg(which)
+  if (length(labels) == 0L) return(0)
+
+  tf <- tempfile(fileext = ".pdf")
+
+  # Remember the previously active device (if any)
+  prev_dev <- try(grDevices::dev.cur(), silent = TRUE)
+
+  # Open a throwaway PDF device just to get font metrics
+  grDevices::pdf(tf, width = 7, height = 7)
+  tmp_dev <- grDevices::dev.cur()
+
+  op <- graphics::par(family = fam)
+
+  # Always restore/cleanup the specific temp device we opened
+  on.exit({
+    try(graphics::par(op), silent = TRUE)
+    try(grDevices::dev.off(tmp_dev), silent = TRUE)
+    try(unlink(tf), silent = TRUE)
+    # Restore previous device if it still exists
+    dl <- grDevices::dev.list()
+    if (!inherits(prev_dev, "try-error") && !is.null(dl) && prev_dev %in% dl) {
+      try(grDevices::dev.set(prev_dev), silent = TRUE)
+    }
+  }, add = FALSE)
+
+  if (which == "width") {
+    max(strwidth(labels, units = "inches", cex = cex, srt = angle))
+  } else {
+    max(strheight(labels, units = "inches", cex = cex, srt = angle))
+  }
+}
+
+# --- compute required PDF size and par(mai) given labels + grid size
+compute_pdf_and_margins <- function(
+  xLabs, yLabs,
+  nCols, nRows,
+  cexX = 1, cexY = 1,
+  xAngle = 90,
+  # legend / padding
+  legend_space_in = 0.60,
+  pad_in         = 0.33,
+  title_in       = 1.40,
+  right_pad_in   = 0.25,
+  # cell-size constraints
+  min_cell_w_in  = 0.20,
+  min_cell_h_in  = 0.16,
+  max_cell_w_in  = 0.40,    # NEW: cap width per column (optional)
+  max_cell_h_in  = 0.24,    # NEW: cap height per row   (requested)
+  # plot-area floors (heatmap area only; margins are added on top)
+  min_total_plot_w_in = 6.0,
+  min_total_plot_h_in = 3.0,
+  # absolute hard caps on *total* device (optional)
+  max_total_width_in  = 60,
+  max_total_height_in = 60,
+  asterisksOnly=FALSE
+) {
+  if(!asterisksOnly) min_cell_w_in = min_cell_w_in * 3.3
+
+  # label extents in inches; for x at 90°, vertical need is the *width* of text
+  x_label_vert_in <- .measure_text_inches(xLabs, angle = xAngle, cex = cexX, which = "width")
+  y_label_horiz_in <- .measure_text_inches(yLabs, angle = 0,      cex = cexY, which = "width")
+
+  # margins in inches
+  bottom_in <- pad_in + x_label_vert_in + 0.25
+  left_in   <- pad_in + y_label_horiz_in + 0.25
+  top_in    <- title_in
+  right_in  <- legend_space_in + right_pad_in
+
+  # ---- plot area height/width (heatmap grid only) with min & max per-cell clamps
+  plot_w_min <- max(min_total_plot_w_in, nCols * min_cell_w_in)
+  plot_w_max <- if (is.finite(max_cell_w_in)) nCols * max_cell_w_in else Inf
+  plot_w_in  <- if (is.finite(plot_w_max)) min(plot_w_min, plot_w_max) else plot_w_min
+
+  plot_h_min <- max(min_total_plot_h_in, nRows * min_cell_h_in)
+  plot_h_max <- if (is.finite(max_cell_h_in)) nRows * max_cell_h_in else Inf
+  plot_h_in  <- if (is.finite(plot_h_max)) min(plot_h_min, plot_h_max) else plot_h_min
+
+  # total device size
+  width_in  <- left_in + plot_w_in + right_in
+  height_in <- bottom_in + plot_h_in + top_in
+
+  # clamp to sane bounds
+  width_in  <- max(8,  min(max_total_width_in,  width_in))
+  height_in <- max(2.2,  min(max_total_height_in, height_in))
+
+  list(width = width_in, height = height_in, mai = c(bottom_in, left_in, top_in, right_in))
 }
