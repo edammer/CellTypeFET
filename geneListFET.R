@@ -144,7 +144,8 @@ sz_overall <- compute_pdf_and_margins(
   cexX  = cexX_global,
   cexY  = cexY_global,
   xAngle = 90,
-  asterisksOnly = asterisksOnly
+  asterisksOnly = asterisksOnly,
+  barOption = barOption
 )
 
 
@@ -294,7 +295,7 @@ for (refDataFile in refDataFiles) {
 	  }
 	}
 	allGenesNetwork <- as.matrix(allGenes,stringsAsFactors = FALSE) 
-	
+
 	categories <- list()
 	categoryNames=names(refData) #reference list names
 	for (i in 1:length(categoryNames)) {
@@ -644,7 +645,9 @@ for (refDataFile in refDataFiles) {
 		  nRows = length(names(categories)),
 		  cexX  = cexX_global,
 		  cexY  = cexY_page,
-		  xAngle = 90
+		  xAngle = 90,
+		  asterisksOnly = asterisksOnly,
+		  barOption = barOption
 		)
 
 		# Set margins in inches to prevent 'figure margins too large'
@@ -711,9 +714,9 @@ for (refDataFile in refDataFiles) {
 		               zlim = legend_zlim,  # c(min(FTpVal, na.rm = TRUE), 1),
 		               main = paste0("Enrichment of ",this.heatmapTitle,"\n",
 		                      "Row marker list(s) file: ",refDataFile," - Gene Symbol Enr. (",duplicateHandling,")\n",
-		                      if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr for columns (categories): ", bkgrFileForCategories) }, if(strictSymmetry) { " | Redundancy ACROSS column lists REMOVED\n" } else { "\n" },
+		                      if(!is.na(categoriesFile)) { paste0("Column (categories) file: ",categoriesFile) }, if (!is.na(categoriesFile) & !is.na(bkgrFileForCategories)) { " | " }, if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr: ", bkgrFileForCategories) }, if(strictSymmetry) { " (Redundancy ACROSS column lists REMOVED)\n" } else { "\n" },
 		                      "Heatmap: Fisher Exact p value, Uncorrected\n",
-		                      "(p-values colored ", if(!asterisksOnly) { "and shown " },"when below ",maxPcolor,addText,")\n"),
+		                      "(p-values colored ", if(!asterisksOnly) { "and shown " },"when below ",maxPcolor,addText,") p<0.05*, <0.01**, <0.005***"),
 		               cex.main=1.3,  # 0.8; more recently 1.75
 		               this.heatmapScale = this.heatmapScale)  # for legend title specificity
 		}
@@ -766,15 +769,47 @@ for (refDataFile in refDataFiles) {
 		               zlim = legend_zlim,  # c(0,max(NegLogCorr,na.rm=TRUE)),
 		               main = paste0("Enrichment of ",this.heatmapTitle,"\n",
 		                      "Row marker list(s) file: ",refDataFile," - Gene Symbol Enr. (",duplicateHandling,")\n",
-		                      if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr for columns (categories): ", bkgrFileForCategories) }, if(strictSymmetry) { " | Redundancy ACROSS column lists REMOVED\n" } else { "\n" },
+		                      if(!is.na(categoriesFile)) { paste0("Column (categories) file: ",categoriesFile) }, if (!is.na(categoriesFile) & !is.na(bkgrFileForCategories)) { " | " }, if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr: ", bkgrFileForCategories) }, if(strictSymmetry) { " (Redundancy ACROSS column lists REMOVED)\n" } else { "\n" },
 		                      "Heatmap: -log(p), BH Corrected\n",
-		                      "(Corrected p-values, FDR, colored ",if(!asterisksOnly) { "and shown " }, "when below ",maxPcolor,")"), #*** Uncorrected\n (p-values shown)"),
+		                      "(Corrected p-values, FDR, colored ",if(!asterisksOnly) { "and shown " }, "when below ",maxPcolor,") FDR<0.05*, <0.01**, <0.005***"),
 		               cex.main=1.3,  # 0.8; more recently 1.75
 		               this.heatmapScale = this.heatmapScale)  # for legend title specificity
 		}
 	} else {  #if barOption==TRUE:  PLOT BAR PLOTS FOR EACH REFERENCE LIST
-		par(mfrow=c(verticalCompression,1))
-		par(mar=c(15,7,4.5,1))
+
+		# --- per-page margins in inches (x uses same labels; y = names(categories) this page)
+		cexY_page <- scale_cex(max(nchar(names(categories))), length(names(categories)), base = 1.4)
+
+		sz_page <- compute_pdf_and_margins(
+		  xLabs = xSymbolsText,
+		  yLabs = names(categories),
+		  nCols = length(xSymbolsText),
+		  nRows = 20,  # fixed height;  length(names(categories)),
+		  cexX  = cexX_global,
+		  cexY  = cexY_page,
+		  xAngle = 90,
+		  asterisksOnly = asterisksOnly,
+		  barOption = barOption
+		)
+
+		# Set margins in inches to prevent 'figure margins too large'
+		par(mfrow = c(verticalCompression, 1))
+		par(mai = sz_page$mai)    # <-- replaces previous par(mar = ...)
+		#par(mar=c(15,7,4.5,1))
+
+		# --- *X* dynamic cex for axis labels ---
+		nX <- length(xSymbolsText)
+#		nY <- length(names(categories))
+#		maxY <- if (nY) max(nchar(names(categories)), na.rm = TRUE) else 0
+		maxX <- if (nX) max(nchar(xSymbolsText),      na.rm = TRUE) else 0
+
+		scale_cex <- function(chars, n, base = 1.6, per_char = 0.015, per_n = 0.003, mn = 0.6, mx = 1.8) {
+		  out <- base - per_char * chars - per_n * n
+		  max(mn, min(mx, out))
+		}
+		cexX <- scale_cex(maxX, nX, base = 1.25)     # for x labels (bottom)
+#		cexY <- scale_cex(maxY, nY, base = 1.4)  # for y labels (left)
+
 	
 		moduleColors= if (modulesInMemory) { names(moduleList) } else { "bisque4" }  # if (modulesInMemory), expect colors for names(moduleList)
 		xSymbolsText= ifelse ( rep(modulesInMemory,length(names(moduleList))), paste0(names(moduleList)," ",orderedModules[match(names(moduleList),orderedModules[,2]),1]), names(moduleList) )
@@ -785,8 +820,8 @@ for (refDataFile in refDataFiles) {
 				#*** added to handle inf values
 				plotting[which(!is.na(plotting) & !is.finite(plotting))]<- -log10(1e-323)   #minimum double-precision number // vs. <- max(plotting[is.finite(plotting)], na.rm=TRUE)
 				cellType <- rownames(NegLogUncorr)[i]
-				barplot(plotting,main = cellType, ylab="",cex.names=1.1, width=1.5,las=2,cex.main=2, legend.text=F,col=moduleColors,names.arg=xSymbolsText)
-				mtext(side=2, line=3, "-log(pValue)\n(Uncorrected)", col="black", font=1, cex=1.5)
+				barplot(plotting,main = cellType, ylab="",cex.names=cexX, las=2, cex.main=1.7, cex.axis=1.4, legend.text=F,col=moduleColors,names.arg=xSymbolsText)
+				mtext(side=2, line=2.6, "-log(p)\n(Uncorrected)", col="black", font=2, cex=1.5)
 				abline(h=1.3,col="red")
 			}
 		}
@@ -797,8 +832,8 @@ for (refDataFile in refDataFiles) {
 				#*** added to handle inf values
 				plotting[which(!is.na(plotting) & !is.finite(plotting))]<- -log10(1e-323)   #minimum double-precision number // vs. <- max(plotting[is.finite(plotting)], na.rm=TRUE)
 				cellType <- rownames(NegLogCorr)[i]
-				barplot(plotting,main = cellType, ylab="",cex.names=1.1, width=1.5,las=2,cex.main=2, legend.text=F,col=moduleColors,names.arg=xSymbolsText)
-				mtext(side=2, line=3, "-log(FDR)\n(Benjamini-Hochberg Correction)", col="black", font=1, cex=1.5)
+				barplot(plotting,main = cellType, ylab="",cex.names=cexX, las=2, cex.main=1.7, cex.axis=1.4, legend.text=F,col=moduleColors,names.arg=xSymbolsText)
+				mtext(side=2, line=2.6, "-log(FDR)\n(Benjamini-Hochberg Correction)", col="black", font=2, cex=1.5)
 				abline(h=1.3,col="red")
 			}
 		}
@@ -1762,9 +1797,14 @@ compute_pdf_and_margins <- function(
   # absolute hard caps on *total* device (optional)
   max_total_width_in  = 60,
   max_total_height_in = 60,
-  asterisksOnly=FALSE
+  asterisksOnly=FALSE,
+  barOption=FALSE
 ) {
   if(!asterisksOnly) min_cell_w_in = min_cell_w_in * 3.3
+  if(barOption) {
+    min_total_plot_h_in=min_total_plot_h_in * 2.2
+    nRows = 20
+  }
 
   # label extents in inches; for x at 90°, vertical need is the *width* of text
   x_label_vert_in <- .measure_text_inches(xLabs, angle = xAngle, cex = cexX, which = "width")
