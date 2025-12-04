@@ -23,6 +23,9 @@
 #          - Note that only column (module or category) lists plus bkgrFileForCategories genes ever count towards background -- reference list genes not hitting any category/module (column) list do not.
 #          - asterisksOnly=TRUE prints *, **, and *** for p (or FDR) <0.05, <0.01, <0.005, but without the explicit printing of p or FDR values in any heatmap cell.
 #          - added support for viridisLite palettes: "plasma", "inferno", "magma", "rocket", "cividis", "mako", "turbo" (yellow to cool colors only), and "viridis"; must have viridisLite package installed.
+# +12/3/25 - uncoupled heatmapScale from legend scale.  New argument: legendScale="minusLog" (default) or "unlog"
+#          - unbranched (no conditional logic and replication of) single call to draw heatmap depending on heatmapScale setting
+#          - failsafe for heatmap cells below maxPcolor guarantees first non-white color from paletteColors fills cells with values that otherwise might not get color near the threshold
 #-------------------------------------------------------------------------#
 # revisited to define fly cell types in Seurat 87 lists 2/10/2019
 # Analysis for Laura Volpicelli, mouse a-Syn Bilaterally Injected Brain Regions 2/15/2019
@@ -30,7 +33,7 @@
 #=========================================================================#
 geneListFET <- function(modulesInMemory=TRUE,categoriesFile=NA,categorySpeciesCode=NA,resortListsDecreasingSize=FALSE,barOption=FALSE,adjustFETforLookupEfficiency=FALSE,allowDuplicates=TRUE,strictSymmetry=FALSE,
                         refDataFiles=NA,speciesCode=NA,refDataDescription="Ref_list(s)-rows-not_described",FileBaseName="FET_to_RefList(s)",paletteColors="YlGnBu", asterisksOnly=TRUE,  #colDataDescription="CategOrModules-cols-not_described",
-                        heatmapTitle="Enrichment Heatmap (title not specified)", heatmapScale="minusLogFDR", maxPcolor=0.25, verticalCompression=1, bkgrFileForCategories=NA, rootdir="./", reproduceHistoricCalc=FALSE, env=.GlobalEnv) {
+                        heatmapTitle="Enrichment Heatmap (title not specified)", heatmapScale="minusLogFDR", legendScale="minusLog", maxPcolor=0.25, verticalCompression=1, bkgrFileForCategories=NA, rootdir="./", reproduceHistoricCalc=FALSE, env=.GlobalEnv) {
 
 require(WGCNA,quietly=TRUE)
 require(RColorBrewer,quietly=TRUE)
@@ -38,6 +41,13 @@ require(biomaRt,quietly=TRUE)
 
 refDataDir<-outputfigs<-outputtabs<-rootdir
 
+# standardize heatmapScale options
+if (toupper(heatmapScale)=="FDR") heatmapScale <- "minusLogFDR"
+if (toupper(heatmapScale)=="P") heatmapScale <- "p.unadj"
+heatmapScale <- match.arg(heatmapScale, c("minusLogFDR","p.unadj"))
+
+# normalize legend scale choice (now uncoupled from heatmapScale)
+legendScale <- match.arg(legendScale, c("minusLog","unlog"))
 
 if(!modulesInMemory) {  # Read in Categories as list 
   # old format: 2 column .csv with Symbol and "ClusterID" columns
@@ -61,7 +71,7 @@ if(!modulesInMemory) {  # Read in Categories as list
 	# leave duplicated symbols within each module/category list -
 	#enumeratedLists<-lapply(enumeratedLists,unique)
 	
-	# leave duplicates in the clusters or modules being checked - they should contribute to overlap/enrichmend with reference lists more than once if duplicated.
+	# leave duplicates in the clusters or modules being checked - they should contribute to overlap/enrichment with reference lists more than once if duplicated.
 	#if(!allowDuplicates) {
 	#  while( length(unique(unlist(enumeratedLists))) < length(unlist(enumeratedLists)) ) {
 	#    duplicatedvec<-unique(unlist(enumeratedLists)[which(duplicated(unlist(enumeratedLists)))])
@@ -149,7 +159,7 @@ sz_overall <- compute_pdf_and_margins(
 )
 
 
-# open the PDF big enough for all pages
+# open the PDF (sized for dimensions big enough for the largest page)
 refDataDescription.forFilename <- gsub('\\/','.', gsub('\\\\', ".", gsub('\\.\\.','', refDataDescription)))
 pdf_path <- paste0(outputfigs,"/",FileBaseName,".Overlap.in.",refDataDescription.forFilename,".pdf")
 
@@ -326,7 +336,7 @@ for (refDataFile in refDataFiles) {
 	
 	allGenes_cleaned <- na.omit(allGenesNetwork)
 	totProteomeLength <- length(allGenes_cleaned)
-#   fisher.test below now reports specific contingency table causing error, rather than preventing running here.
+	## fisher.test below now reports specific contingency table causing error, rather than preventing running here.
 #	if(max(sapply(refData,length))>totProteomeLength) {
 #	  cat (paste0("One of your reference data lists is larger than the background from the categories (WGCNA or specified categories file--all symbols)!\nUsing the bigger number for Fisher Exact would change all stats. Skipping ",refDataFile,".\n\n"))
 #	  next
@@ -336,13 +346,6 @@ for (refDataFile in refDataFiles) {
 	
 	cat(paste0("Performing FET for lists [",iter,"] now.\n"))
 	
-	
-	###swap cell type lists to categories and module members to moduleList (they are backwards up till here)
-	#categories.bak<-categories
-	#categories<-moduleList
-	#moduleList<-categories.bak
-	#nModules <- length(names(moduleList))
-	#nCategories <- length(names(categories))
 	
 	FTpVal <- matrix(,nrow = nModules, ncol = nCategories)
 	categoryOverlap <- matrix(,nrow = nModules, ncol = nCategories) 
@@ -410,12 +413,7 @@ for (refDataFile in refDataFiles) {
 	}
 	
 	
-	#moduleList<-categories
-	#categories<-categories.bak
-	#nModules <- length(names(moduleList))
-	#nCategories <- length(names(categories))
-	
-	
+
 	rownames(FTpVal) <- RefDataElements
 	colnames(FTpVal) <- Categories1
 	rownames(categoryOverlap) <- RefDataElements
@@ -481,10 +479,7 @@ for (refDataFile in refDataFiles) {
 	}
 	xlabels <- orderedLabelsByRelatedness[,1]
 	
-	
-	
-	
-	
+
 	### Write p Values to a table/file
 	#rownames(hitLists)<-categoriesNameMatcher$Annot[match(rownames(categoryOverlap),categoriesNameMatcher$Annot)]
 	#rownames(FTpVal)<-categoriesNameMatcher$Annot[match(rownames(FTpVal),categoriesNameMatcher$Annot)]
@@ -493,7 +488,45 @@ for (refDataFile in refDataFiles) {
 	
 	outputData <- rbind("FET pValue", FTpVal,"FDR corrected",adjustedPval,"Overlap",categoryOverlap,"CategoryHitsInDataSet(ADJ)",numCategoryHitsInDataset,"CategoryHitsInDataSet(Unadj)",numCategoryHitsInDataset.UNADJ,"OverlappedGeneLists",hitLists)
         refDataFile.forFilename<-gsub('\\/','.',gsub('\\\\', ".", gsub('\\.\\.','',refDataFile)))  # avoid relative path invalid characters inclusion in csv filename
-	write.csv(outputData,file = paste0(outputtabs,"/",FileBaseName,".Overlap.in.",refDataFile.forFilename,"-",duplicateHandling,"-hitListStats.csv"))
+	#write.csv(outputData,file = paste0(outputtabs,"/",FileBaseName,".Overlap.in.",refDataFile.forFilename,"-",duplicateHandling,"-hitListStats.csv"))
+	# --- write hitListStats with fallback to short unique name if open/write fails ---
+	primary_csv <- file.path(
+	  outputtabs,
+	  paste0(FileBaseName, ".Overlap.in.", refDataFile.forFilename, "-", duplicateHandling, "-hitListStats.csv")
+	)
+	
+	.try_write_csv <- function(dat, path) {
+	  ok <- tryCatch({
+	    utils::write.csv(dat, file = path)
+	    TRUE
+	  }, error = function(e) {
+	    FALSE
+	  })
+	  ok
+	}
+	
+	if (suppressWarnings(.try_write_csv(outputData, primary_csv))) {
+	  cat(sprintf("- Wrote hitListStats to: %s\n", primary_csv))
+	} else {
+	  cat("x Primary CSV write failed (likely path too long). Trying short fallback name...\n")
+	  i <- 1L
+	  wrote <- FALSE
+	  repeat {
+	    fallback_csv <- file.path(outputtabs, paste0(i, ".hitListStats.csv"))
+	    if (!file.exists(fallback_csv)) {
+	      if (suppressWarnings(.try_write_csv(outputData, fallback_csv))) {
+	        cat(sprintf("+ Fallback write succeeded: %s\n", fallback_csv))
+	        wrote <- TRUE
+	        break
+	      }
+	    }
+	    i <- i + 1L
+	    if (i > 10000L) {
+	      stop("x Failed to write hitListStats.csv after 10000 attempts (both primary and fallback).")
+	    }
+	  }
+	  if (!wrote) stop("x Could not write hitListStats.csv (short filename fallback failed).")
+	}
 
 	#auto-check if all FET (BH) calculations = 1, then switch to p value visualization
 		if(length(dim(adjustedPval))<2) {  #*** handle single input list
@@ -568,69 +601,90 @@ for (refDataFile in refDataFiles) {
 		       colvec<- fullPalette[1:(paletteLength-4)]
 		     }
 		   } else {  # display.bewer.all() group 3; take half of the shifting gradient
-		   paletteLength=11
-		   # pure purple for outOfPark maximum scale color, deprecated.
-		   # if(paletteColors[iter] %in% c("Spectral","RdYlGn","RdYlBu","RdGy","RdBu","PuOr","BrBG")) { outOfParkColor="#A020F0" } else { outOfParkColor="darkviolet" }
-		   outOfParkColor=brewer.pal(paletteLength,paletteColors[iter])[paletteLength]
-#		   if(as.boolean(revPalette[iter])) {
-		      colvec<- rev(brewer.pal(paletteLength,paletteColors[iter])[1:6])  #rev so we take the left side of the palette color swatches
-#		   } else {
-#		      colvec<- brewer.pal(paletteLength,paletteColors[iter])[6:11]  #no rev if we want to take the right half of the palette color swatches
-#		   }
+		     paletteLength=11
+		     outOfParkColor=brewer.pal(paletteLength,paletteColors[iter])[paletteLength]
+		     colvec<- rev(brewer.pal(paletteLength,paletteColors[iter])[1:6])  #rev so we take the left side of the palette color swatches
 		   }
 		}
 		   
-		colvecRamped1<- vector()
+		colvecBase<- vector()
 		for (k in 1:(length(colvec)-1)) {
 		   gradations <- if (k<4) { 6 } else { 25 }
 		   temp<-colorRampPalette(c(colvec[k],colvec[k+1]))
-		   colvecRamped1<-c(colvecRamped1, temp(gradations))
+		   colvecBase<-c(colvecBase, temp(gradations))
 		}
 		
-		temp2<-colorRampPalette(c(colvecRamped1[length(colvecRamped1)], outOfParkColor)) ## grade to outOfParkColor at top of scale
-		colvecRamped1<-c(colvecRamped1, temp2(gradations))
+		temp2<-colorRampPalette(c(colvecBase[length(colvecBase)], outOfParkColor)) ## grade to outOfParkColor at top of scale
+		colvecBase<-c(colvecBase, temp2(gradations))
 		
-		if (maxPcolor==1) {
-		  colvecRamped1<-c("#FFFFFF",colvecRamped1)  ## grade to white at top of -logFDR scale (no significance)
-		} else {
-		  if(this.heatmapScale=="minusLogFDR") {
-		    whiteProp <- -log10(maxPcolor) / max(NegLogCorr[is.finite(NegLogCorr)], na.rm=TRUE)
-		    nColors=length(colvecRamped1)
-		    nWhite<-ceiling( (whiteProp / (1 - whiteProp)) * nColors )  # final padding value count to meet p>maxPcolor all being "white"
-                    # avoid any color if max(NetLogCorr) < -log(maxPcolor) (whiteProp is negative in this case)
-		    if (max(NegLogCorr, na.rm=T) < -log10(maxPcolor)) {
-		      colvecRamped1 <- c(rep("white", length(colvecRamped1)+1), colvecRamped1)  # 1/2 +1 white increments
-		      allWhite=TRUE  # a dummy value of 2x the max -log10(maxPcolor) will be the max color intensity on the scale, no color will be plotted in the heatmap
-		      legend_zlim <- c(0, 2 * -log10(maxPcolor))  # extend legend up to ~2× threshold
-                    } else {
-		      colvecRamped1 <- c(rep("white", nWhite), colvecRamped1)
-		      allWhite=FALSE
-		      legend_zlim <- c(0, max(NegLogCorr, na.rm = TRUE))
-		    }
+                ## helpers to generate data-aware palettes for the two legend scales (robust to edge cases)
+                make_cols_neglog <- function(zmax, thrNeg, eps = 1e-9) {
+                  if(thrNeg==0) return(c("#FFFFFF",colvecBase))
+                  cols <- colvecBase
+                  nC   <- length(cols)
+                  if (!is.finite(zmax) || zmax <= 0) return(rep("white", nC))
+                  thrNeg <- max(0, thrNeg)
+                  ## Case A: nothing exceeds threshold -> all white (old logic equivalent to zmax <= thrNeg)
+                  if (zmax <= thrNeg + eps) return(rep("white", nC))
+                  ## Case B: threshold ~0 -> no whites
+                  if (thrNeg <= eps) return(cols)
+                  ## General case: left-pad with white up to thrNeg
+                  frac <- thrNeg / zmax
+                  ## Keep strictly below 1 to avoid division by zero
+                  frac <- max(0, min(1 - eps, frac))
+                  nW <- ceiling((frac / (1 - frac)) * nC)
+                  nW <- max(0L, nW)  #min(nW, 5L * nC))  # safety clamp
+                  c(rep("white", nW), cols)
+                }
+                make_cols_unlog <- function(pmin, pmax, maxPcolor, eps = 1e-9) {
+                  cols <- rev(colvecBase)
+                  nC   <- length(cols)
+                  if (!is.finite(pmin)) pmin <- 0
+                  if (!is.finite(pmax) || pmax <= 0) pmax <- 1
+                  rng <- max(pmax - pmin, .Machine$double.eps)
+                  ## Case A: everything above threshold -> all white (min > maxPcolor)
+                  if (pmin >= maxPcolor - eps) return(rep("white", nC))
+                  ## Case B: nothing above threshold -> no whites (max <= maxPcolor)
+                  if (pmax <= maxPcolor + eps) return(cols)
+                  ## General case: append whites at the TOP end for p >= maxPcolor
+                  frac <- (pmax - maxPcolor) / rng
+                  frac <- max(0, min(1 - eps, frac))
+                  nW <- ceiling((frac / (1 - frac)) * nC)
+                  nW <- max(0L, nW)  #min(nW, 5L * nC))  # safety clamp
+                  c(cols, rep("white", nW))
+                }
 
+		## Build palette for minusLog (left padding = whites for small −logP)
+		cols_neglog <- colvecBase
+		allWhite_log <- FALSE
+		if (maxPcolor == 1) {
+		  cols_neglog <- c("#FFFFFF", cols_neglog)
+		} else {
+		  maxNeg <- max(NegLogCorr[is.finite(NegLogCorr)], na.rm = TRUE)
+		  thrNeg <- -log10(maxPcolor)
+		  if (!is.finite(maxNeg) || maxNeg <= 0) { maxNeg <- thrNeg }
+		  if (maxNeg < thrNeg) {
+		    cols_neglog <- rep("white", length(cols_neglog))
+		    allWhite_log <- TRUE
 		  } else {
-		    if(max(FTpVal, na.rm=T)<maxPcolor) {
-		      colvecRamped1 <- colvecRamped1  # don't add white -- everything is lt maxPcolor
-		      allWhite=FALSE
-		      legend_zlim <- c(min(FTpVal, na.rm = TRUE), max(FTpVal, na.rm = TRUE))
-		    } else {
-		      whiteProp <- (max(FTpVal, na.rm=T) -maxPcolor) / (max(FTpVal, na.rm=T) - min(FTpVal, na.rm=T))  # different proportion calculation for p value range
-		      nColors=length(colvecRamped1)
-		      nWhite<-ceiling( (whiteProp / (1 - whiteProp)) * nColors ) #final padding value count to meet p>maxPcolor all being "white"
-                      # avoid any color if min(FTpVal) > maxPcolor (whiteProp is negative in this case)
-		      if (min(FTpVal, na.rm=T) > maxPcolor) {
-		        colvecRamped1 <- c(rep("white", length(colvecRamped1)+1), colvecRamped1)  # 1/2 +1 white increments
-		        allWhite=TRUE  # a dummy value of 1/2x the maxPcolor will be the max color intensity on the scale, no color will be plotted in the heatmap
-		        legend_zlim <- c(0, 1)
-		      } else {
-		        colvecRamped1 <- c(rep("white", nWhite), colvecRamped1)
-		        allWhite=FALSE
-		        legend_zlim <- c(min(FTpVal, na.rm = TRUE), 1)
-		      }
-		    }
+		    whiteProp_left <- max(0, min(1, thrNeg / maxNeg))
+		    nWhite <- if (whiteProp_left >= 1 - 1e-12) length(cols_neglog)
+		              else ceiling((whiteProp_left / (1 - whiteProp_left)) * length(cols_neglog))
+		    cols_neglog <- c(rep("white", nWhite), cols_neglog)
 		  }
 		}
-		
+		## Build palette for unlogged p (top padding = whites for p >= maxPcolor)
+		cols_unlog <- rev(colvecBase)
+		allWhite_p  <- FALSE
+		whiteProp_top <- max(0, min(1, 1 - maxPcolor))
+		if (whiteProp_top >= 0.999) {
+		  cols_unlog <- rep("white", length(cols_unlog))
+		  allWhite_p <- TRUE
+		} else if (whiteProp_top > 0) {
+		  nWhite <- ceiling((whiteProp_top / (1 - whiteProp_top)) * length(cols_unlog))
+		  cols_unlog <- c(cols_unlog, rep("white", nWhite))   ## append to TOP end
+		}
+
 		if (modulesInMemory) { categoryColorSymbols=paste0("ME",names(moduleList)) } else { if(!length(na.omit(match(orderedLabelsByRelatedness[,2],rownames(NegLogUncorr))))==nrow(orderedLabelsByRelatedness)) { categoryColorSymbols=dummyColors } else { categoryColorSymbols=names(moduleList) } }
 		xSymbolsText= ifelse ( rep(modulesInMemory,length(names(moduleList))), paste0(names(moduleList)," ",orderedModules[match(names(moduleList),orderedModules[,2]),1]), names(moduleList) )
 
@@ -668,113 +722,104 @@ for (refDataFile in refDataFiles) {
 		cexX <- scale_cex(maxX, nX, base = 1.5)     # for x labels (bottom)
 		cexY <- scale_cex(maxY, nY, base = 1.4)  # for y labels (left)
 
-		if (this.heatmapScale=="p.unadj") {
+          ## -------- Unified plotting: choose base P-matrix, transform by legendScale, and use the same
+          ##          palette & limits for BOTH the heatmap and the legend.
+          baseP <- if (identical(this.heatmapScale, "minusLogFDR")) adjustedPval else FTpVal
+          overlayText <- if (identical(this.heatmapScale, "minusLogFDR")) textMatrix1 else textMatrix.p.unadj
+  
+          if (identical(legendScale, "minusLog")) {
+            ## plot in −log10 space
+            Z <- -log10(pmax(baseP, 1e-323))
+            zlim_use <- c(0, max(Z[is.finite(Z)], na.rm = TRUE))
+            cols_use <- make_cols_neglog(zmax = zlim_use[2], thrNeg = -log10(maxPcolor))
+            legend_label <- if (identical(this.heatmapScale,"minusLogFDR"))
+                               as.expression(bquote(-log[10]~FDR))
+                             else as.expression(bquote(-log[10]~P))
+          } else {
+            ## plot in unlogged p space
+            Z <- baseP
+            zlim_use <- c(suppressWarnings(min(Z, na.rm = TRUE)), min(1,max(Z[is.finite(Z)], na.rm=TRUE)))
+            if (!is.finite(zlim_use[1])) zlim_use[1] <- 0
+            cols_use <- make_cols_unlog(pmin = zlim_use[1], pmax = zlim_use[2], maxPcolor = maxPcolor)
+            legend_label <- if (identical(this.heatmapScale,"minusLogFDR")) "FDR" else "P Value"
+          }
+  
+          ## Build color matrix exactly as labeledHeatmap would, then repair any
+          ## white cells that are actually below the unlogged threshold.
+          cm_raw <- WGCNA::numbers2colors(Z, colors = cols_use, signed = FALSE, lim = zlim_use)
+          dim(cm_raw) <- dim(Z)
 
-		# Convert matrix values to colors
-		bgColors <- WGCNA::numbers2colors(FTpVal, colors = rev(colvecRamped1),
-		                                  signed = FALSE, lim = c(0, max(FTpVal, na.rm=TRUE)))
+          ## Force any p <= maxPcolor to be colored,
+          ## even if binning nudged them into the white band at the top.
+          eps <- max(.Machine$double.eps * 32, 1e-12,
+                     (abs(zlim_use[2] - zlim_use[1]) / max(1L, length(cols_use))) / 2048)
+          ## First non-white body color from the legend palette actually used:
+          body_cols <- cols_use[!(toupper(cols_use) %in% c("WHITE", "#FFFFFF"))]
+          if (!length(body_cols)) body_cols <- rev(colvecBase)  # fallback
+          first_body <- body_cols[1L]
 
-		# Convert hex colors to perceived brightness
-		hex2brightness <- function(hex) {
-		  rgb <- col2rgb(hex)
-		  # luminance formula
-		  (0.299*rgb[1,] + 0.587*rgb[2,] + 0.114*rgb[3,]) / 255
-		}
+          ## Base p-values (works for either heatmapScale)
+          baseP_here <- if (identical(this.heatmapScale, "minusLogFDR")) adjustedPval else FTpVal
 
-		brightness <- matrix(hex2brightness(bgColors), nrow = nrow(FTpVal))
+          white_mask <- toupper(cm_raw) %in% c("WHITE", "#FFFFFF")
+          fix_mask   <- white_mask & is.finite(baseP_here) & (baseP_here <= (maxPcolor + eps))
+          if (any(fix_mask, na.rm = TRUE)) cm_raw[fix_mask] <- first_body
 
-		## White text if background is dark (<0.5), black otherwise
-		textColors <- ifelse(brightness < 0.5, "white", "black")
-		dim(textColors) = dim(textMatrix.p.unadj)
+          colorMatrix <- cm_raw
 
-		labeledHeatmap.txtMatCols(Matrix = FTpVal,
-		               yLabels = names(categories), #refData list elements, ordered by size if that option was on
-		               xLabels = categoryColorSymbols,
-		               xLabelsAngle = 90,
-		               xSymbols = xSymbolsText,
-		               xColorLabels=FALSE,
-		               colors = rev(colvecRamped1),
-		               allWhite = allWhite,
-		               textMatrix =  textMatrix.p.unadj,
-		               txtMatCols = textColors,
-		               setStdMargins = FALSE,
-		               cex.text = if(asterisksOnly) { 0.6 } else { 0.43 },
-		               cex.lab.x = cexX,     # *X* adjust dynamically to accomodate maximum xLabels string length *X*
-		               cex.lab.y = cexY,     # *X* adjust dynamically to accomodate text height within the available height for each labeledHeatmap row, given pdf height *X*
-		               verticalSeparator.x=c(rep(c(1:length(names(moduleList))),nrow(orderedLabelsByRelatedness))),
-		               verticalSeparator.col = 1,
-		               verticalSeparator.lty = 1,
-		               verticalSeparator.lwd = 1,
-		               verticalSeparator.ext = 0,
-		               horizontalSeparator.y=c(rep(c(1:length(names(categories))),nrow(orderedLabelsByRelatedness))),
-		               horizontalSeparator.col = 1,
-		               horizontalSeparator.lty = 1,
-		               horizontalSeparator.lwd = 1,
-		               horizontalSeparator.ext = 0,
-		               zlim = legend_zlim,  # c(min(FTpVal, na.rm = TRUE), 1),
-		               main = paste0("Enrichment of ",this.heatmapTitle,"\n",
-		                      "Row marker list(s) file: ",refDataFile," - Gene Symbol Enr. (",duplicateHandling,")\n",
-		                      if(!is.na(categoriesFile)) { paste0("Column (categories) file: ",categoriesFile) }, if (!is.na(categoriesFile) & !is.na(bkgrFileForCategories)) { " | " }, if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr: ", bkgrFileForCategories) }, if(strictSymmetry) { " (Redundancy ACROSS column lists REMOVED)\n" } else { "\n" },
-		                      "Heatmap: Fisher Exact p value, Uncorrected\n",
-		                      "(p-values colored ", if(!asterisksOnly) { "and shown " },"when below ",maxPcolor,addText,") p<0.05*, <0.01**, <0.005***"),
-		               cex.main=1.3,  # 0.8; more recently 1.75
-		               this.heatmapScale = this.heatmapScale)  # for legend title specificity
-		}
-		
-		if (this.heatmapScale=="minusLogFDR") {
-		#*** added to handle inf values
-		NegLogCorr[which(!is.na(NegLogCorr) & !is.finite(NegLogCorr))]<- -log10(1e-323)   #minimum double-precision number // vs. <- max(NegLogCorr[is.finite(NegLogCorr)], na.rm=TRUE)
+          ## Brightness-aware text color on the *final* matrix:
+          hex2brightness <- function(hex) { rgb <- col2rgb(hex); (0.299*rgb[1,]+0.587*rgb[2,]+0.114*rgb[3,])/255 }
+          brightness <- matrix(hex2brightness(colorMatrix), nrow = nrow(Z))
+          textColors <- ifelse(brightness < 0.5, "white", "black"); dim(textColors) <- dim(Z)
+  
+          labeledHeatmap.txtMatCols(
+            Matrix = Z,
+            yLabels = names(categories),
+            xLabels = categoryColorSymbols,
+            xLabelsAngle = 90,
+            xSymbols = xSymbolsText,
+            xColorLabels = FALSE,
+            colors = cols_use,
+            colorMatrix = colorMatrix,  # precise colors avoiding any white if p<maxPcolor
+            allWhite = if(length(which(cols_use=="white"))==length(cols_use)) { TRUE } else { FALSE },
+            colvecBase = colvecBase,
+            textMatrix = overlayText,
+            txtMatCols = textColors,
+            setStdMargins = FALSE,
+            cex.text = if (asterisksOnly) 0.6 else 0.43,
+            cex.lab.x = cexX,
+            cex.lab.y = cexY,
+            verticalSeparator.x = c(rep(c(1:length(names(moduleList))), nrow(orderedLabelsByRelatedness))),
+            verticalSeparator.col = 1,
+            verticalSeparator.lty = 1,
+            verticalSeparator.lwd = 1,
+            verticalSeparator.ext = 0,
+            horizontalSeparator.y = c(rep(c(1:length(names(categories))), nrow(orderedLabelsByRelatedness))),
+            horizontalSeparator.col = 1,
+            horizontalSeparator.lty = 1,
+            horizontalSeparator.lwd = 1,
+            horizontalSeparator.ext = 0,
+            zlim = zlim_use,
+            main = paste0("Enrichment of ", this.heatmapTitle, "\n",
+                          "Row marker list(s) file: ", refDataFile, " - Gene Symbol Enr. (", duplicateHandling, ")\n",
+                          if(!is.na(categoriesFile)) { paste0("Column (categories) file: ",categoriesFile) }, 
+                          if (!is.na(categoriesFile) & !is.na(bkgrFileForCategories)) { " | " }, 
+                          if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr: ", bkgrFileForCategories) }, 
+                          if(strictSymmetry) { " (Redundancy ACROSS column lists REMOVED)\n" } else { "\n" },
+                          if (identical(this.heatmapScale,"minusLogFDR")) {
+                            "Heatmap: FDR-corrected p values"
+                          } else {
+                            "Heatmap: Fisher Exact p value, Uncorrected"
+                          },
+                          if (!asterisksOnly) " (values shown)" else "",
+                          "\n(values colored when below ", maxPcolor, ") ",if(this.heatmapScale=="minusLogFDR") { "FDR" } else { "p" },"<0.05*, <0.01**, <0.005***"),
+            cex.main = 1.3,
+            this.heatmapScale = this.heatmapScale,
+            legendScale = legendScale,
+            ## no legend overrides; legend uses the SAME zlim and SAME palette as the heatmap
+            legendLabelOverride = legend_label
+          )
 
-		# Convert matrix values to colors
-		bgColors <- WGCNA::numbers2colors(NegLogCorr, colors = colvecRamped1,
-		                                  signed = FALSE, lim = c(0, max(NegLogCorr, na.rm=TRUE)))
-
-		# Convert hex colors to perceived brightness
-		hex2brightness <- function(hex) {
-		  rgb <- col2rgb(hex)
-		  # luminance formula
-		  (0.299*rgb[1,] + 0.587*rgb[2,] + 0.114*rgb[3,]) / 255
-		}
-
-		brightness <- matrix(hex2brightness(bgColors), nrow = nrow(NegLogCorr))
-
-		## White text if background is dark (<0.5), black otherwise
-		textColors <- ifelse(brightness < 0.5, "white", "black")
-		dim(textColors) = dim(textMatrix1)
-
-		labeledHeatmap.txtMatCols(Matrix = NegLogCorr,
-		               yLabels = names(categories), #refData list elements, ordered by size if that option was on
-		               xLabels = categoryColorSymbols,
-		               xLabelsAngle = 90,
-		               xSymbols = xSymbolsText,
-		               xColorLabels=FALSE,
-		               colors = colvecRamped1,
-		               allWhite = allWhite,
-		               textMatrix = textMatrix1, #signif(adjustedPval, 2),
-		               txtMatCols = textColors,  #white/black overlay, depending on brightness (argument supported in custom function implemented here, from WGCNA source on 9/29/2025)
-		               setStdMargins = FALSE,
-		               cex.text = if(asterisksOnly) { 0.6 } else { 0.43 },
-		               cex.lab.x = cexX,  # *X* adjust dynamically to accomodate maximum xLabels string length *X*
-		               cex.lab.y = cexY,   # *X* adjust dynamically to accomodate text height within the available height for each labeledHeatmap row, given pdf height *X*
-		               verticalSeparator.x=c(rep(c(1:length(names(moduleList))),nrow(orderedLabelsByRelatedness))),
-		               verticalSeparator.col = 1,
-		               verticalSeparator.lty = 1,
-		               verticalSeparator.lwd = 1,
-		               verticalSeparator.ext = 0,
-		               horizontalSeparator.y=c(rep(c(1:length(names(categories))),nrow(orderedLabelsByRelatedness))),
-		               horizontalSeparator.col = 1,
-		               horizontalSeparator.lty = 1,
-		               horizontalSeparator.lwd = 1,
-		               horizontalSeparator.ext = 0,
-		               zlim = legend_zlim,  # c(0,max(NegLogCorr,na.rm=TRUE)),
-		               main = paste0("Enrichment of ",this.heatmapTitle,"\n",
-		                      "Row marker list(s) file: ",refDataFile," - Gene Symbol Enr. (",duplicateHandling,")\n",
-		                      if(!is.na(categoriesFile)) { paste0("Column (categories) file: ",categoriesFile) }, if (!is.na(categoriesFile) & !is.na(bkgrFileForCategories)) { " | " }, if(!is.na(bkgrFileForCategories)) { paste0("Added bkgr: ", bkgrFileForCategories) }, if(strictSymmetry) { " (Redundancy ACROSS column lists REMOVED)\n" } else { "\n" },
-		                      "Heatmap: -log(p), BH Corrected\n",
-		                      "(Corrected p-values, FDR, colored ",if(!asterisksOnly) { "and shown " }, "when below ",maxPcolor,") FDR<0.05*, <0.01**, <0.005***"),
-		               cex.main=1.3,  # 0.8; more recently 1.75
-		               this.heatmapScale = this.heatmapScale)  # for legend title specificity
-		}
 	} else {  #if barOption==TRUE:  PLOT BAR PLOTS FOR EACH REFERENCE LIST
 
 		# --- per-page margins in inches (x uses same labels; y = names(categories) this page)
@@ -857,7 +902,7 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
     yLabelsPosition = "left", xColorWidth = 2 * strheight("M"), 
     yColorWidth = 2 * strwidth("M"), xColorOffset = strheight("M")/3, 
     yColorOffset = strwidth("M")/3, colorMatrix = NULL, 
-    colors = NULL, allWhite=FALSE, naColor = "grey", textMatrix = NULL, 
+    colors = NULL, allWhite=FALSE, colvecBase= NULL, naColor = "grey", textMatrix = NULL, 
     cex.text = NULL, textAdj = c(0.5, 0.5), cex.lab = NULL, cex.lab.x = cex.lab, 
     cex.lab.y = cex.lab, colors.lab.x = 1, colors.lab.y = 1, 
     font.lab.x = 1, font.lab.y = 1, bg.lab.x = NULL, bg.lab.y = NULL, 
@@ -867,7 +912,9 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
     horizontalSeparator.y = NULL, horizontalSeparator.col = 1, 
     horizontalSeparator.lty = 1, horizontalSeparator.lwd = 1, 
     horizontalSeparator.ext = 0, horizontalSeparator.interval = 0, 
-    showRows = NULL, showCols = NULL, txtMatCols = "black", cex.main=1.5, this.heatmapScale = NA,...) 
+    showRows = NULL, showCols = NULL, txtMatCols = "black", cex.main=1.5,
+    this.heatmapScale = NA, legendScale = "minusLog",
+    legendColorsOverride = NULL, legendLimOverride = NULL, legendLabelOverride = NULL, legendTickTransform = NULL, ...)
 {
     textFnc = match.fun("text")
     if (!is.null(colorLabels)) {
@@ -941,13 +988,30 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
         colors = heat.colors(30)
     if (invertColors) 
         colors = rev(colors)
+    
+    # pick legend label: override > legendScale > legacy behavior
+    legend_label_local <- if (!is.null(legendLabelOverride)) {
+      legendLabelOverride
+    } else if (legendScale == "minusLog") {
+      if (this.heatmapScale == "minusLogFDR") as.expression(bquote(-log[10]~FDR)) else as.expression(bquote(-log[10]~p))
+    } else {
+      if (this.heatmapScale == "minusLogFDR") "FDR P Value" else "P Value"
+    }
     labPos = .heatmapWithLegend(Matrix[showRows, showCols, drop = FALSE], 
         signed = FALSE, colorMatrix = colorMatrix, colors = colors, 
         naColor = naColor, cex.legendLabel = cex.main, plotLegend = plotLegend, 
         keepLegendSpace = keepLegendSpace,
-        legendLabel = if (this.heatmapScale=="minusLogFDR") { as.expression(bquote(-log[10]~FDR)) } else { "P Value" },
+        allWhite=allWhite, colvecBase=colvecBase, legendScale=legendScale,  # in case we want to add color to the legend beyond an all-white range plotted
+        #legendLabel = if (this.heatmapScale=="minusLogFDR") { as.expression(bquote(-log[10]~FDR)) } else { "P Value" },
+        legendLabel = legend_label_local,
         legendSpan = if(dim(Matrix)[1]<4) { "plot+bottom" } else { "plot" }, 
-        legendAlign = if(dim(Matrix)[1]<4) { "span" } else { "heatmapCenter" }, ...)
+        legendAlign = if(dim(Matrix)[1]<4) { "span" } else { "heatmapCenter" }, 
+        legendLabelOverride = legend_label_local, ...)
+#        legendColorsOverride = legendColorsOverride,
+#        legendLimOverride = legendLimOverride,
+#        legendLabelOverride = legendLabelOverride, 
+#        tickLabTransform = legendTickTransform, ...) 
+
     plotbox = labPos$box
     xmin = plotbox[1]
     xmax = plotbox[2]
@@ -1259,12 +1323,23 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
                      frameTicks = FALSE, tickLen = 0.09,
                      tickLabelAngle = -90,  #previously oriented vertically: 0
                      legendSpan = c("plot","figure","plot+bottom","plot+top"),
-                     legendAlign = c("heatmapCenter","span"), # can now center legend on heatmap rows (used with <4 rows in heatmap)
-                     allWhite=FALSE,
+                     legendAlign = c("heatmapCenter","span"), # can now center legend on heatmap rows (used with >4 rows in heatmap); spans to bottom with 4 or fewer rows
+                     allWhite = FALSE,
+                     colvecBase = NULL,
+                     legendScale = NULL,
+                     legendColorsOverride = NULL,
+                     legendLimOverride    = NULL,
+                     legendLabelOverride  = NULL,
+                     tickLabTransform = NULL,
                      ...)
 {
  
   if (length(naColor)==0) naColor = 0;  ### Means transparent (as opposed to white) color.
+  # apply legend overrides *without* altering the heatmap color mapping
+  legend_colors_final <- if (is.null(legendColorsOverride)) colors else legendColorsOverride
+  legend_lim_final    <- if (is.null(legendLimOverride))    zlim   else legendLimOverride
+  legend_label_final  <- if (is.null(legendLabelOverride))  ""     else legendLabelOverride
+
   data = as.matrix(data); nCols = ncol(data); nRows = nrow(data);
   if (is.null(zlim)) 
   {
@@ -1431,12 +1506,45 @@ labeledHeatmap.txtMatCols <- function (Matrix, xLabels, yLabels = NULL, xSymbols
     }
 
     # Draw legend (ticks horizontal because tickLabelAngle = -90 => angle 0 for vertical legend)
+    # Use overrides if provided; otherwise use heatmap palette and limits
+    legend_colors_use <- if (is.null(legendColorsOverride)) colors else legendColorsOverride
+    legend_lim_use    <- if (is.null(legendLimOverride))    zlim   else legendLimOverride
+    if (isTRUE(allWhite)) {
+      ## Build a legend that shows the (all-white) heatmap range first,
+      ## then appends the body palette for values ABOVE that range.
+      ## Use the current legend palette length as the size of the white band.
+      base_cols <- tryCatch(get("colvecBase", inherits = TRUE), error = function(e) NULL)
+      if (is.null(base_cols) || !length(base_cols)) {
+        base_cols <- if (is.matrix(colors)) as.vector(colors[, 1]) else colors
+      }
+      nWhiteBand <- if (is.matrix(legend_colors_use)) nrow(legend_colors_use) else length(legend_colors_use)
+      ## If legend is in −log10 space, extend the upper limit so non-white colors are shown.
+      is_minuslog <- legendScale=="minusLog"  #!is.null(tickLabTransform) ||
+                     #(is.language(legend_label_final) &&
+                     # grepl("-log", paste(deparse(legend_label_final), collapse = "")))
+      if (is.null(legend_lim_use) || length(legend_lim_use) != 2L || any(!is.finite(legend_lim_use))) {
+        legend_lim_use <- if (!is.null(zlim)) zlim else c(0, 1)
+      }
+      low  <- ifelse(is.finite(legend_lim_use[1]), legend_lim_use[1], 0)  # should always be finite
+      high <- ifelse(is.finite(legend_lim_use[2]), legend_lim_use[2], 1)
+      if (is_minuslog) {
+        legend_colors_use <- c(rep("white", nWhiteBand), base_cols)
+        legend_lim_use <- c(low, max(high * 2, low + (high - low) * 2))
+      } else {  # unlogged legend scale
+        base_cols100<-grDevices::colorRampPalette(base_cols)(100)
+        nWhiteBand.percent <- 100 - floor(range(data, na.rm=T)[1] * 100) 
+        legend_colors_use <- c(rev(base_cols100), rep("white", ceiling(nWhiteBand.percent/(1-(nWhiteBand.percent/100)))) )
+        legend_lim_use <- c(0, 1)
+      }
+    }
     legendPosition <- .plotColorLegend(
       xmin = xmaxAll - (legendSpace.usr - legendGap.usr),
       xmax = xmaxAll - (legendSpace.usr - legendGap.usr - legendWidth.usr),
       ymin = ymin.leg, ymax = ymax.leg,
-      lim = zlim, colors = colors, tickLen.usr = tickLen.usr,
-      cex.axis = cex.legendAxis, lab = legendLabel,
+      #lim = zlim, colors = colors, tickLen.usr = tickLen.usr,
+      lim = legend_lim_use,
+      colors = legend_colors_use, tickLen.usr = tickLen.usr,
+      cex.axis = cex.legendAxis, lab = legend_label_final, # legendLabel,
       cex.lab = cex.legendLabel, tickLabelAngle = tickLabelAngle
     )
     
@@ -1574,10 +1682,12 @@ if (FALSE)
                             tickGap.usr = 0.5 * (if (horizontal) strheight("M") else strwidth("M")),
                             lim, cex.axis = 1, tickLabelAngle = if (horizontal) 0 else -90,
                             lab = "", cex.lab = 1, labAngle = 0, 
-                            labGap = 0.6 * (if (horizontal) strheight("M") else strwidth("M"))
+                            labGap = 0.6 * (if (horizontal) strheight("M") else strwidth("M")),
+                            tickLabTransform = NULL
                             )
 {
   tickVal = .autoTicks(lim[1], lim[2]);
+  tickLab = if (is.null(tickLabTransform)) tickVal else tickLabTransform(tickVal)
   nTicks = length(tickVal);
 
   if (horizontal) {
