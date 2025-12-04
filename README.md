@@ -87,12 +87,17 @@ categorySpeciesCode="dmelanogaster"				            # What species are the gene s
 bkgrFileForCategories="Dmel_geneBackground.csv"             # 12/2025: Augment background of categoriesFile symbols with a single-column no-header list (in a no comma .CSV file)
 
 # Other Options
-allowDuplicates=TRUE				# Allow duplicate symbols across different lists for overlap?
+allowDuplicates=TRUE				# Allow duplicate symbols across different row lists (refDataFiles) for overlap?
+                                    # if FALSE, row lists' duplicte entries removed entirely (since removing only extra instance(s) would have to choose to keep in one row)
 						            # (should be true if you have general cell type lists and e.g. disease-associated phenotype cell type lists)
+strictSymmetry=FALSE                # remove duplicated symbols across columns (modules or categoriesFile, background lists)
+                                    # if TRUE, and all row list symbols are present in column lists, background, then swapping row and column input will give similar or identical stats
 resortListsDecreasingSize=FALSE		# resort categories/modules and reference data lists? (decreasing size order)
-barOption=FALSE					    # draw bar charts for each list overlap instead of a heatmap.
+heatmapScale="FDR"                  # "FDR" (or still accepted previous default "minusLogFDR") will FDR-correct all p values used for plotting. Otherwise "p" or "p.unlog". This is independent of the legendScale setting.
+legendScale="minusLog"              # Heatmap legend will be plotted with increasing significance and color intensity for higher -log10(p or FDR). "unlog" option has increasing significance for lower p or FDR.
+barOption=FALSE					    # Draw bar charts for each list overlap instead of a heatmap.
 asterisksOnly=FALSE                 # 12/2025: new (TRUE, default); if FALSE, print p (or FDR) values within heatmap cells if below maxPcolor and expand width of columns to accomodate this text
-maxPcolor=0.25                      # 12/2025: p (or FDR) values below this value will get some heatmap color in the scale; above the value, cells will be WHITE
+maxPcolor=0.25                      # 12/2025: p (or FDR) values below this value will get some heatmap color in the scale; above the value, cells will be WHITE. Plots with no values below this value only show color in the legend.
 adjustFETforLookupEfficiency=FALSE	# adjust p FET input for cross-species lookup inefficiency/loss of list member counts?
 verticalCompression=1				# DEPRECATED for values >1. Plot(s) may be squeezed into 1 row out of this many in each PDF page, compressing the heatmap tracks vertically (or the bar chart heights) for each reference list)
                                     # (PDF dimensions and margins for plots are now dynamically calculated to fit all plot elements and text optimally, one per page.)
